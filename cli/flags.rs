@@ -475,8 +475,8 @@ fn info_parse(flags: &mut Flags, matches: &clap::ArgMatches) {
   reload_arg_parse(flags, matches);
   ca_file_arg_parse(flags, matches);
   unstable_arg_parse(flags, matches);
+  no_check_arg_parse(flags, matches);
   let json = matches.is_present("json");
-  flags.no_check = true;
   flags.subcommand = DenoSubcommand::Info {
     file: matches.value_of("file").map(|f| f.to_string()),
     json,
@@ -870,10 +870,7 @@ TypeScript compiler cache: Subdirectory containing TS compiler output.",
     .arg(Arg::with_name("file").takes_value(true).required(false))
     .arg(reload_arg().requires("file"))
     .arg(ca_file_arg())
-    // TODO(nayeemrmn): `--no-check` has been removed for `deno info`, but it
-    // shouldn't cause flag parsing to fail for backward-compatibility. Remove
-    // this line for v2.0.0.
-    .arg(no_check_arg().hidden(true))
+    .arg(no_check_arg())
     .arg(unstable_arg())
     .arg(
       Arg::with_name("json")
