@@ -388,7 +388,7 @@ declare class ByteLengthQueuingStrategy
 interface ReadableStream<R = any> {
   readonly locked: boolean;
   cancel(reason?: any): Promise<void>;
-  getIterator(options?: { preventCancel?: boolean }): AsyncIterableIterator<R>;
+  values(options?: { preventCancel?: boolean }): AsyncIterableIterator<R>;
   // getReader(options: { mode: "byob" }): ReadableStreamBYOBReader;
   getReader(): ReadableStreamDefaultReader<R>;
   pipeThrough<T>(

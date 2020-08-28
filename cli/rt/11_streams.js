@@ -435,7 +435,7 @@
       return readableStreamCancel(this, reason);
     }
 
-    getIterator({
+    values({
       preventCancel,
     } = {}) {
       if (!isReadableStream(this)) {
@@ -548,7 +548,7 @@
     [Symbol.asyncIterator](
       options = {},
     ) {
-      return this.getIterator(options);
+      return this.values(options);
     }
   }
 
