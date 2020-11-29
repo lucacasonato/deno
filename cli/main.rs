@@ -39,6 +39,7 @@ mod resolve_addr;
 mod signal;
 mod source_maps;
 mod specifier_handler;
+mod standalone;
 mod text_encoding;
 mod tokio_util;
 mod tools;
@@ -967,8 +968,9 @@ pub fn main() {
   colors::enable_ansi(); // For Windows 10
 
   let args: Vec<String> = env::args().collect();
-  let flags = flags::flags_from_vec(args);
+  standalone::standalone();
 
+  let flags = flags::flags_from_vec(args);
   if let Some(ref v8_flags) = flags.v8_flags {
     init_v8_flags(v8_flags);
   }
