@@ -56,6 +56,7 @@ use crate::media_type::MediaType;
 use crate::permissions::Permissions;
 use crate::program_state::ProgramState;
 use crate::specifier_handler::FetchHandler;
+use crate::standalone::create_standalone_binary;
 use crate::worker::MainWorker;
 use deno_core::error::generic_error;
 use deno_core::error::AnyError;
@@ -157,105 +158,41 @@ async fn compile_command(
   source_file: String,
   out_file: String,
 ) -> Result<(), AnyError> {
+  if !flags.unstable {
+    exit_unstable("compile");
+  }
+
   let debug = flags.log_level == Some(log::Level::Debug);
 
   let module_specifier = ModuleSpecifier::resolve_url_or_path(&source_file)?;
   let program_state = ProgramState::new(flags.clone())?;
+
+  let module_graph = create_module_graph_and_maybe_check(
+    module_specifier.clone(),
+    program_state.clone(),
+    debug,
+  )
+  .await?;
 
   info!(
     "{} {}",
     colors::green("Bundle"),
     module_specifier.to_string()
   );
-
-  let handler = Rc::new(RefCell::new(FetchHandler::new(
-    &program_state,
-    // when bundling, dynamic imports are only access for their type safety,
-    // therefore we will allow the graph to access any module.
-    Permissions::allow_all(),
-  )?));
-  let mut builder = module_graph::GraphBuilder::new(
-    handler,
-    program_state.maybe_import_map.clone(),
-    program_state.lockfile.clone(),
-  );
-  builder.add(&module_specifier, false).await?;
-  let module_graph = builder.get_graph();
-
-  if !flags.no_check {
-    // TODO(@kitsonk) support bundling for workers
-    let lib = if flags.unstable {
-      module_graph::TypeLib::UnstableDenoWindow
-    } else {
-      module_graph::TypeLib::DenoWindow
-    };
-    let result_info =
-      module_graph.clone().check(module_graph::CheckOptions {
-        debug,
-        emit: false,
-        lib,
-        maybe_config_path: flags.config_path.clone(),
-        reload: flags.reload,
-      })?;
-
-    debug!("{}", result_info.stats);
-    if let Some(ignored_options) = result_info.maybe_ignored_options {
-      eprintln!("{}", ignored_options);
-    }
-    if !result_info.diagnostics.is_empty() {
-      return Err(generic_error(result_info.diagnostics.to_string()));
-    }
-  }
-
-  let (bundle_str, stats, maybe_ignored_options) =
-    module_graph.bundle(module_graph::BundleOptions {
-      debug,
-      maybe_config_path: flags.config_path,
-    })?;
-
-  match maybe_ignored_options {
-    Some(ignored_options) if flags.no_check => {
-      eprintln!("{}", ignored_options);
-    }
-    _ => {}
-  }
-  debug!("{}", stats);
+  let bundle_str = bundle_module_graph(module_graph, flags, debug)?;
 
   info!(
     "{} {}",
     colors::green("Compile"),
     module_specifier.to_string()
   );
-  let original_binary_path = std::env::current_exe()?;
-  let mut original_bin = tokio::fs::read(original_binary_path).await?;
 
-  let mut bundle;
+  let mut compressor = GzEncoder::new(Vec::new(), Compression::default());
+  compressor.write_all(&*bundle_str.as_bytes().to_vec()).expect("expected to write bundle to gzip");
+  let compressed = compressor.finish().expect("expected to compress bundle");
 
-  let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-  encoder.write_all(&*bundle_str.as_bytes().to_vec()).expect("couldn't write code to binary");
-  bundle = encoder.finish().expect("invalid compressed code in binary");
+  create_standalone_binary(compressed, out_file).await?;
 
-  let mut magic_trailer = b"DENO".to_vec();
-  magic_trailer.write_all(&original_bin.len().to_be_bytes())?;
-
-  let mut final_bin =
-    Vec::with_capacity(original_bin.len() + bundle.len() + magic_trailer.len());
-  final_bin.append(&mut original_bin);
-  final_bin.append(&mut bundle);
-  final_bin.append(&mut magic_trailer);
-
-  let out_file = if cfg!(windows) && !out_file.ends_with(".exe") {
-    format!("{}.exe", out_file)
-  } else {
-    out_file
-  };
-  tokio::fs::write(&out_file, final_bin).await?;
-  #[cfg(unix)]
-  {
-    use std::os::unix::fs::PermissionsExt;
-    let perms = std::fs::Permissions::from_mode(0o777);
-    tokio::fs::set_permissions(out_file, perms).await?;
-  }
   Ok(())
 }
 
@@ -409,6 +346,73 @@ async fn eval_command(
   Ok(())
 }
 
+async fn create_module_graph_and_maybe_check(
+  module_specifier: ModuleSpecifier,
+  program_state: Arc<ProgramState>,
+  debug: bool,
+) -> Result<module_graph::Graph, AnyError> {
+  let handler = Rc::new(RefCell::new(FetchHandler::new(
+    &program_state,
+    // when bundling, dynamic imports are only access for their type safety,
+    // therefore we will allow the graph to access any module.
+    Permissions::allow_all(),
+  )?));
+  let mut builder = module_graph::GraphBuilder::new(
+    handler,
+    program_state.maybe_import_map.clone(),
+    program_state.lockfile.clone(),
+  );
+  builder.add(&module_specifier, false).await?;
+  let module_graph = builder.get_graph();
+
+  if !program_state.flags.no_check {
+    // TODO(@kitsonk) support bundling for workers
+    let lib = if program_state.flags.unstable {
+      module_graph::TypeLib::UnstableDenoWindow
+    } else {
+      module_graph::TypeLib::DenoWindow
+    };
+    let result_info =
+      module_graph.clone().check(module_graph::CheckOptions {
+        debug,
+        emit: false,
+        lib,
+        maybe_config_path: program_state.flags.config_path.clone(),
+        reload: program_state.flags.reload,
+      })?;
+
+    debug!("{}", result_info.stats);
+    if let Some(ignored_options) = result_info.maybe_ignored_options {
+      eprintln!("{}", ignored_options);
+    }
+    if !result_info.diagnostics.is_empty() {
+      return Err(generic_error(result_info.diagnostics.to_string()));
+    }
+  }
+
+  Ok(module_graph)
+}
+
+fn bundle_module_graph(
+  module_graph: module_graph::Graph,
+  flags: Flags,
+  debug: bool,
+) -> Result<String, AnyError> {
+  let (bundle, stats, maybe_ignored_options) =
+    module_graph.bundle(module_graph::BundleOptions {
+      debug,
+      maybe_config_path: flags.config_path,
+    })?;
+  match maybe_ignored_options {
+    Some(ignored_options) if flags.no_check => {
+      eprintln!("{}", ignored_options);
+    }
+    _ => {}
+  }
+  debug!("{}", stats);
+  Ok(bundle)
+}
+
 async fn bundle_command(
   flags: Flags,
   source_file: String,
@@ -433,44 +437,12 @@ async fn bundle_command(
         module_specifier.to_string()
       );
 
-      let handler = Rc::new(RefCell::new(FetchHandler::new(
-        &program_state,
-        // when bundling, dynamic imports are only access for their type safety,
-        // therefore we will allow the graph to access any module.
-        Permissions::allow_all(),
-      )?));
-      let mut builder = module_graph::GraphBuilder::new(
-        handler,
-        program_state.maybe_import_map.clone(),
-        program_state.lockfile.clone(),
-      );
-      builder.add(&module_specifier, false).await?;
-      let module_graph = builder.get_graph();
-
-      if !flags.no_check {
-        // TODO(@kitsonk) support bundling for workers
-        let lib = if flags.unstable {
-          module_graph::TypeLib::UnstableDenoWindow
-        } else {
-          module_graph::TypeLib::DenoWindow
-        };
-        let result_info =
-          module_graph.clone().check(module_graph::CheckOptions {
-            debug,
-            emit: false,
-            lib,
-            maybe_config_path: flags.config_path.clone(),
-            reload: flags.reload,
-          })?;
-
-        debug!("{}", result_info.stats);
-        if let Some(ignored_options) = result_info.maybe_ignored_options {
-          eprintln!("{}", ignored_options);
-        }
-        if !result_info.diagnostics.is_empty() {
-          return Err(generic_error(result_info.diagnostics.to_string()));
-        }
-      }
+      let module_graph = create_module_graph_and_maybe_check(
+        module_specifier,
+        program_state.clone(),
+        debug,
+      )
+      .await?;
 
       let mut paths_to_watch: Vec<PathBuf> = module_graph
         .get_modules()
@@ -502,19 +474,7 @@ async fn bundle_command(
     let flags = flags.clone();
     let out_file = out_file.clone();
     async move {
-      let (output, stats, maybe_ignored_options) =
-        module_graph.bundle(module_graph::BundleOptions {
-          debug,
-          maybe_config_path: flags.config_path,
-        })?;
-
-      match maybe_ignored_options {
-        Some(ignored_options) if flags.no_check => {
-          eprintln!("{}", ignored_options);
-        }
-        _ => {}
-      }
-      debug!("{}", stats);
+      let output = bundle_module_graph(module_graph, flags, debug)?;
 
       debug!(">>>>> bundle END");
 
@@ -1081,7 +1041,10 @@ pub fn main() {
   colors::enable_ansi(); // For Windows 10
 
   let args: Vec<String> = env::args().collect();
-  standalone::standalone();
+  if let Err(err) = standalone::try_run_standalone_binary(args.clone()) {
+    eprintln!("{}: {}", colors::red_bold("error"), err.to_string());
+    std::process::exit(1);
+  }
 
   let flags = flags::flags_from_vec(args);
   if let Some(ref v8_flags) = flags.v8_flags {

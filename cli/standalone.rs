@@ -4,6 +4,7 @@ use crate::permissions::Permissions;
 use crate::program_state::ProgramState;
 use crate::tokio_util;
 use crate::worker::MainWorker;
+use deno_core::error::type_error;
 use deno_core::error::AnyError;
 use deno_core::futures::FutureExt;
 use deno_core::ModuleLoader;
@@ -13,52 +14,53 @@ use std::cell::RefCell;
 use std::convert::TryInto;
 use std::env::current_exe;
 use std::fs::File;
-use std::fs::read;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::io::Write;
 use std::pin::Pin;
 use std::rc::Rc;
 use flate2::read::GzDecoder;
 
-pub fn standalone() {
-  let current_exe_path =
-    current_exe().expect("expect current exe path to be known");
+const MAGIC_TRAILER: &[u8; 8] = b"d3n0l4nd";
 
-  let mut current_exe = File::open(&current_exe_path)
-    .expect("expected to be able to open current exe");
-  let magic_trailer_pos = current_exe
-    .seek(SeekFrom::End(-12))
-    .expect("expected to be able to seek to magic trailer in current exe");
-  let mut magic_trailer = [0; 12];
-  current_exe
-    .read_exact(&mut magic_trailer)
-    .expect("expected to be able to read magic trailer from current exe");
-  let (magic_trailer, bundle_pos) = magic_trailer.split_at(4);
-  if magic_trailer == b"DENO" {
-    let bundle_pos_arr: &[u8; 8] =
-      bundle_pos.try_into().expect("slice with incorrect length");
+/// This function will try to run this binary as a standalone binary
+/// produced by `deno compile`. It determines if this is a stanalone
+/// binary by checking for the magic trailer string `D3N0` at EOF-12.
+/// After the magic trailer is a u64 pointer to the start of the JS
+/// file embedded in the binary. This file is read, and run. If no
+/// magic trailer is present, this function exits with Ok(()).
+pub fn try_run_standalone_binary(args: Vec<String>) -> Result<(), AnyError> {
+  let current_exe_path = current_exe()?;
+
+  let mut current_exe = File::open(current_exe_path)?;
+  let trailer_pos = current_exe.seek(SeekFrom::End(-16))?;
+  let mut trailer = [0; 16];
+  current_exe.read_exact(&mut trailer)?;
+  let (magic_trailer, bundle_pos_arr) = trailer.split_at(8);
+  if magic_trailer == MAGIC_TRAILER {
+    let bundle_pos_arr: &[u8; 8] = bundle_pos_arr.try_into()?;
     let bundle_pos = u64::from_be_bytes(*bundle_pos_arr);
-    current_exe
-      .seek(SeekFrom::Start(bundle_pos))
-      .expect("expected to be able to seek to bundle pos in current exe");
+    current_exe.seek(SeekFrom::Start(bundle_pos))?;
 
-    let bundle_len = magic_trailer_pos - bundle_pos;
-    let mut compressed = read(&current_exe_path).expect("unable to read exe");
+    let bundle_len = trailer_pos - bundle_pos;
 
-    compressed = Vec::from(compressed.split_at(bundle_pos as usize).1);
-    compressed = Vec::from(compressed.split_at(bundle_len as usize).0);
+    let mut compressed = Vec::<u8>::new();
+    current_exe.take(bundle_len).read_to_end(&mut compressed)
+      .expect("expected to read compressed bundle");
+    // TODO: check amount of bytes read
 
     let mut decompress = GzDecoder::new(&compressed as &[u8]);
-    let mut src = String::new();
-    decompress.read_to_string(&mut src).unwrap();
+    let mut bundle = String::new();
+    decompress.read_to_string(&mut bundle).expect("expected to decompress bundle");
 
-    let result = tokio_util::run_basic(run(src));
-    if let Err(err) = result {
+    if let Err(err) = tokio_util::run_basic(run(bundle, args)) {
       eprintln!("{}: {}", colors::red_bold("error"), err.to_string());
       std::process::exit(1);
     }
     std::process::exit(0);
+  } else {
+    Ok(())
   }
 }
 
@@ -74,7 +76,11 @@ impl ModuleLoader for EmbeddedModuleLoader {
     _referrer: &str,
     _is_main: bool,
   ) -> Result<ModuleSpecifier, AnyError> {
-    assert_eq!(specifier, SPECIFIER);
+    if specifier != SPECIFIER {
+      return Err(type_error(
+        "Self-contained binaries don't support module loading",
+      ));
+    }
     Ok(ModuleSpecifier::resolve_url(specifier)?)
   }
 
@@ -88,6 +94,11 @@ impl ModuleLoader for EmbeddedModuleLoader {
     let module_specifier = module_specifier.clone();
     let code = self.0.to_string();
     async move {
+      if module_specifier.to_string() != SPECIFIER {
+        return Err(type_error(
+          "Self-contained binaries don't support module loading",
+        ));
+      }
       Ok(deno_core::ModuleSource {
         code,
         module_url_specified: module_specifier.to_string(),
@@ -98,8 +109,11 @@ impl ModuleLoader for EmbeddedModuleLoader {
   }
 }
 
-async fn run(source_code: String) -> Result<(), AnyError> {
-  let flags = Flags::default();
+async fn run(source_code: String, args: Vec<String>) -> Result<(), AnyError> {
+  let mut flags = Flags::default();
+  flags.argv = args[1..].to_vec();
+  // TODO(lucacasonato): remove once you can specify this correctly through embedded metadata
+  flags.unstable = true;
   let main_module = ModuleSpecifier::resolve_url(SPECIFIER)?;
   let program_state = ProgramState::new(flags.clone())?;
   let permissions = Permissions::allow_all();
@@ -114,5 +128,39 @@ async fn run(source_code: String) -> Result<(), AnyError> {
   worker.execute("window.dispatchEvent(new Event('load'))")?;
   worker.run_event_loop().await?;
   worker.execute("window.dispatchEvent(new Event('unload'))")?;
+  Ok(())
+}
+
+/// This functions creates a standalone deno binary by appending a bundle
+/// and magic trailer to the currently executing binary.
+pub async fn create_standalone_binary(
+  mut source_code: Vec<u8>,
+  out_file: String,
+) -> Result<(), AnyError> {
+  let original_binary_path = std::env::current_exe()?;
+  let mut original_bin = tokio::fs::read(original_binary_path).await?;
+
+  let mut trailer = MAGIC_TRAILER.to_vec();
+  trailer.write_all(&original_bin.len().to_be_bytes())?;
+
+  let mut final_bin =
+    Vec::with_capacity(original_bin.len() + source_code.len() + trailer.len());
+  final_bin.append(&mut original_bin);
+  final_bin.append(&mut source_code);
+  final_bin.append(&mut trailer);
+
+  let out_file = if cfg!(windows) && !out_file.ends_with(".exe") {
+    format!("{}.exe", out_file)
+  } else {
+    out_file
+  };
+  tokio::fs::write(&out_file, final_bin).await?;
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o777);
+    tokio::fs::set_permissions(out_file, perms).await?;
+  }
+
   Ok(())
 }
