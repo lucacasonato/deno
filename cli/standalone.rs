@@ -1,31 +1,31 @@
-use std::cell::RefCell;
-use std::convert::TryInto;
-use std::env::current_exe;
-use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
-use std::pin::Pin;
-use std::rc::Rc;
-
-use deno_core::error::AnyError;
-use deno_core::futures::FutureExt;
-use deno_core::ModuleLoader;
-use deno_core::ModuleSpecifier;
-use deno_core::OpState;
-
 use crate::colors;
 use crate::flags::Flags;
 use crate::permissions::Permissions;
 use crate::program_state::ProgramState;
 use crate::tokio_util;
 use crate::worker::MainWorker;
+use deno_core::error::AnyError;
+use deno_core::futures::FutureExt;
+use deno_core::ModuleLoader;
+use deno_core::ModuleSpecifier;
+use deno_core::OpState;
+use std::cell::RefCell;
+use std::convert::TryInto;
+use std::env::current_exe;
+use std::fs::File;
+use std::fs::read;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::pin::Pin;
+use std::rc::Rc;
+use flate2::read::GzDecoder;
 
 pub fn standalone() {
   let current_exe_path =
     current_exe().expect("expect current exe path to be known");
 
-  let mut current_exe = File::open(current_exe_path)
+  let mut current_exe = File::open(&current_exe_path)
     .expect("expected to be able to open current exe");
   let magic_trailer_pos = current_exe
     .seek(SeekFrom::End(-12))
@@ -39,26 +39,21 @@ pub fn standalone() {
     let bundle_pos_arr: &[u8; 8] =
       bundle_pos.try_into().expect("slice with incorrect length");
     let bundle_pos = u64::from_be_bytes(*bundle_pos_arr);
-    println!(
-      "standalone bin! bundle starting at {} and ending at {}.",
-      bundle_pos,
-      magic_trailer_pos - 1
-    );
     current_exe
       .seek(SeekFrom::Start(bundle_pos))
       .expect("expected to be able to seek to bundle pos in current exe");
 
     let bundle_len = magic_trailer_pos - bundle_pos;
-    let mut bundle = String::new();
-    current_exe
-      .take(bundle_len)
-      .read_to_string(&mut bundle)
-      .expect("expected to be able to read bundle from current exe");
-    // TODO: check amount of bytes read
+    let mut compressed = read(&current_exe_path).expect("unable to read exe");
 
-    // println!("standalone bin bundle:\n{}", bundle);
+    compressed = Vec::from(compressed.split_at(bundle_pos as usize).1);
+    compressed = Vec::from(compressed.split_at(bundle_len as usize).0);
 
-    let result = tokio_util::run_basic(run(bundle));
+    let mut decompress = GzDecoder::new(&compressed as &[u8]);
+    let mut src = String::new();
+    decompress.read_to_string(&mut src).unwrap();
+
+    let result = tokio_util::run_basic(run(src));
     if let Err(err) = result {
       eprintln!("{}: {}", colors::red_bold("error"), err.to_string());
       std::process::exit(1);

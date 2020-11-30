@@ -450,6 +450,7 @@ dependencies = [
  "env_logger",
  "exec",
  "filetime",
+ "flate2",
  "fwdansi",
  "http",
  "indexmap",
