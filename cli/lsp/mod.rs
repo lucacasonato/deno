@@ -24,11 +24,11 @@ use state::Event;
 use state::ServerState;
 use state::Status;
 use text::apply_content_changes;
+use utils::asyncify_receiver;
 
 use crate::tokio_util::create_basic_runtime;
 use crate::tsc_config::TsConfig;
 
-use crossbeam_channel::Receiver;
 use deno_core::error::custom_error;
 use deno_core::error::AnyError;
 use deno_core::serde_json;
@@ -47,6 +47,7 @@ use lsp_types::InitializeResult;
 use lsp_types::ServerInfo;
 use std::env;
 use std::time::Instant;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 pub fn start() -> Result<(), AnyError> {
   info!("Starting Deno language server...");
@@ -94,7 +95,8 @@ pub fn start() -> Result<(), AnyError> {
   }
   config.update_capabilities(&initialize_params.capabilities);
 
-  let mut server_state = state::ServerState::new(connection.sender, config);
+  let mut server_state =
+    state::ServerState::new(connection.sender.clone(), config);
 
   // TODO(@kitsonk) need to make this configurable, respect unstable
   let ts_config = TsConfig::new(json!({
@@ -116,7 +118,10 @@ pub fn start() -> Result<(), AnyError> {
 
   // listen for events and run the main loop
   let mut runtime = create_basic_runtime();
-  runtime.block_on(server_state.run(connection.receiver))?;
+  runtime.block_on(async move {
+    let receiver = asyncify_receiver(connection.receiver);
+    server_state.run(receiver).await
+  })?;
 
   io_threads.join()?;
   info!("Stop language server");
@@ -432,7 +437,10 @@ impl ServerState {
   }
 
   /// Start consuming events from the provided receiver channel.
-  pub async fn run(mut self, inbox: Receiver<Message>) -> Result<(), AnyError> {
+  pub async fn run(
+    mut self,
+    mut inbox: UnboundedReceiver<Message>,
+  ) -> Result<(), AnyError> {
     // Check to see if we need to setup the import map
     if let Err(err) = update_import_map(&mut self) {
       ServerState::send_notification::<lsp_types::notification::ShowMessage>(
@@ -472,7 +480,7 @@ impl ServerState {
 
     self.transition(Status::Ready);
 
-    while let Some(event) = self.next_event(&inbox) {
+    while let Some(event) = self.next_event(&mut inbox).await {
       if let Event::Message(Message::Notification(notification)) = &event {
         if notification.method == lsp_types::notification::Exit::METHOD {
           return Ok(());

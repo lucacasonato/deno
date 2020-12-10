@@ -6,10 +6,12 @@ use deno_core::serde_json::Value;
 use deno_core::url::Position;
 use deno_core::url::Url;
 use deno_core::ModuleSpecifier;
+use lsp_server::Message;
 use lsp_server::Notification;
 use serde::de::DeserializeOwned;
 use std::error::Error;
 use std::fmt;
+use tokio::sync::mpsc::unbounded_channel;
 
 // TODO(@kitsonk) support actually supporting cancellation requests from the
 // client.
@@ -96,6 +98,17 @@ pub fn normalize_url(url: Url) -> ModuleSpecifier {
     }
   }
   ModuleSpecifier::from(url)
+}
+
+pub fn asyncify_receiver(
+  crossbeam_receiver: crossbeam_channel::Receiver<Message>,
+) -> tokio::sync::mpsc::UnboundedReceiver<Message> {
+  let (receiver_tx, receiver_rx) = unbounded_channel();
+  tokio::task::spawn_blocking(move || loop {
+    let msg = crossbeam_receiver.recv().unwrap();
+    receiver_tx.send(msg).unwrap();
+  });
+  receiver_rx
 }
 
 #[cfg(test)]

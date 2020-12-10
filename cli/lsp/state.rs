@@ -12,7 +12,6 @@ use crate::deno_dir;
 use crate::import_map::ImportMap;
 use crate::media_type::MediaType;
 
-use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use deno_core::error::anyhow;
 use deno_core::error::AnyError;
@@ -32,6 +31,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::time::Instant;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 type ReqHandler = fn(&mut ServerState, Response);
 type ReqQueue = lsp_server::ReqQueue<(String, Instant), ReqHandler>;
@@ -243,8 +243,11 @@ impl ServerState {
     handler(self, response)
   }
 
-  pub fn next_event(&self, inbox: &Receiver<Message>) -> Option<Event> {
-    inbox.recv().ok().map(Event::Message)
+  pub async fn next_event(
+    &self,
+    inbox: &mut UnboundedReceiver<Message>,
+  ) -> Option<Event> {
+    inbox.recv().await.map(Event::Message)
   }
 
   /// Handle any changes and return a `bool` that indicates if there were
