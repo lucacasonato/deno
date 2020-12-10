@@ -259,10 +259,6 @@ async fn install_command(
   tools::installer::install(flags, &module_url, args, name, root, force)
 }
 
-async fn language_server_command() -> Result<(), AnyError> {
-  lsp::start()
-}
-
 async fn lint_command(
   flags: Flags,
   files: Vec<PathBuf>,
@@ -997,7 +993,10 @@ fn get_subcommand(
     } => {
       install_command(flags, module_url, args, name, root, force).boxed_local()
     }
-    DenoSubcommand::LanguageServer => language_server_command().boxed_local(),
+    DenoSubcommand::LanguageServer => {
+      lsp::start().unwrap();
+      (async { Ok(()) }).boxed_local()
+    }
     DenoSubcommand::Lint {
       files,
       rules,

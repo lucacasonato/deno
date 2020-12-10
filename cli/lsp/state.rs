@@ -33,6 +33,7 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 use std::time::Instant;
 
@@ -206,7 +207,7 @@ pub struct ServerState {
   pub file_cache: Arc<RwLock<MemoryCache>>,
   pub maybe_import_map: Option<Arc<RwLock<ImportMap>>>,
   pub maybe_import_map_uri: Option<Url>,
-  req_queue: ReqQueue,
+  req_queue: Arc<Mutex<ReqQueue>>,
   sender: Sender<Message>,
   pub sources: Arc<RwLock<Sources>>,
   pub shutdown_requested: bool,
@@ -247,14 +248,18 @@ impl ServerState {
     }
   }
 
-  pub fn cancel(&mut self, request_id: RequestId) {
-    if let Some(response) = self.req_queue.incoming.cancel(request_id) {
+  pub fn cancel(&self, request_id: RequestId) {
+    let mut req_queue = self.req_queue.lock().unwrap();
+    if let Some(response) = req_queue.incoming.cancel(request_id) {
       self.send(response.into());
     }
   }
 
   pub fn complete_request(&mut self, response: Response) {
-    let handler = self.req_queue.outgoing.complete(response.id.clone());
+    let handler = {
+      let mut req_queue = self.req_queue.lock().unwrap();
+      req_queue.outgoing.complete(response.id.clone())
+    };
     handler(self, response)
   }
 
@@ -274,21 +279,21 @@ impl ServerState {
     !changed_files.is_empty()
   }
 
-  pub fn register_request(&mut self, request: &Request, received: Instant) {
-    self
-      .req_queue
+  pub fn register_request(&self, request: &Request, received: Instant) {
+    let mut req_queue = self.req_queue.lock().unwrap();
+    req_queue
       .incoming
       .register(request.id.clone(), (request.method.clone(), received));
   }
 
-  pub fn respond(&mut self, response: Response) {
-    if let Some((_, _)) = self.req_queue.incoming.complete(response.id.clone())
-    {
+  pub fn respond(&self, response: Response) {
+    let mut req_queue = self.req_queue.lock().unwrap();
+    if let Some((_, _)) = req_queue.incoming.complete(response.id.clone()) {
       self.send(response.into());
     }
   }
 
-  fn send(&mut self, message: Message) {
+  fn send(&self, message: Message) {
     self.sender.send(message).unwrap()
   }
 
@@ -301,13 +306,13 @@ impl ServerState {
   }
 
   pub fn send_request<R: lsp_types::request::Request>(
-    &mut self,
+    &self,
     params: R::Params,
     handler: ReqHandler,
   ) {
+    let mut req_queue = self.req_queue.lock().unwrap();
     let request =
-      self
-        .req_queue
+      req_queue
         .outgoing
         .register(R::METHOD.to_string(), params, handler);
     self.send(request.into());
