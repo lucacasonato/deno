@@ -20,7 +20,6 @@ use dispatch::NotificationDispatcher;
 use dispatch::RequestDispatcher;
 use state::update_import_map;
 use state::DocumentData;
-use state::Event;
 use state::ServerState;
 use state::Status;
 use text::apply_content_changes;
@@ -129,18 +128,16 @@ pub fn start() -> Result<(), AnyError> {
 }
 
 impl ServerState {
-  fn handle_event(&mut self, event: Event) -> Result<(), AnyError> {
+  fn handle_message(&mut self, message: Message) -> Result<(), AnyError> {
     let received = Instant::now();
-    debug!("handle_event({:?})", event);
+    debug!("handle_message({:?})", message);
 
-    match event {
-      Event::Message(message) => match message {
-        Message::Request(request) => self.on_request(request, received)?,
-        Message::Notification(notification) => {
-          self.on_notification(notification)?
-        }
-        Message::Response(response) => self.complete_request(response),
-      },
+    match message {
+      Message::Request(request) => self.on_request(request, received)?,
+      Message::Notification(notification) => {
+        self.on_notification(notification)?
+      }
+      Message::Response(response) => self.complete_request(response),
     }
 
     // process server sent notifications, like diagnostics
@@ -485,13 +482,13 @@ impl ServerState {
 
     self.transition(Status::Ready);
 
-    while let Some(event) = self.next_event(&mut inbox).await {
-      if let Event::Message(Message::Notification(notification)) = &event {
+    while let Some(message) = inbox.recv().await {
+      if let Message::Notification(notification) = &message {
         if notification.method == lsp_types::notification::Exit::METHOD {
           return Ok(());
         }
       }
-      self.handle_event(event)?
+      self.handle_message(message)?
     }
 
     Err(custom_error(

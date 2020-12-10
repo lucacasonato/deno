@@ -6,7 +6,6 @@ use super::diagnostics::DiagnosticCollection;
 use super::memory_cache::MemoryCache;
 use super::sources::Sources;
 use super::tsc;
-use super::utils::notification_is;
 
 use crate::deno_dir;
 use crate::import_map::ImportMap;
@@ -25,13 +24,11 @@ use lsp_server::RequestId;
 use lsp_server::Response;
 use std::collections::HashMap;
 use std::env;
-use std::fmt;
 use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::time::Instant;
-use tokio::sync::mpsc::UnboundedReceiver;
 
 type ReqHandler = fn(&mut ServerState, Response);
 type ReqQueue = lsp_server::ReqQueue<(String, Instant), ReqHandler>;
@@ -73,37 +70,6 @@ pub fn update_import_map(state: &mut ServerState) -> Result<(), AnyError> {
     state.maybe_import_map = None;
   }
   Ok(())
-}
-
-pub enum Event {
-  Message(Message),
-}
-
-impl fmt::Debug for Event {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    let debug_verbose_not =
-      |notification: &Notification, f: &mut fmt::Formatter| {
-        f.debug_struct("Notification")
-          .field("method", &notification.method)
-          .finish()
-      };
-
-    match self {
-      Event::Message(Message::Notification(notification)) => {
-        if notification_is::<lsp_types::notification::DidOpenTextDocument>(
-          notification,
-        ) || notification_is::<lsp_types::notification::DidChangeTextDocument>(
-          notification,
-        ) {
-          return debug_verbose_not(notification, f);
-        }
-      }
-      _ => (),
-    }
-    match self {
-      Event::Message(it) => fmt::Debug::fmt(it, f),
-    }
-  }
 }
 
 #[derive(Eq, PartialEq, Copy, Clone)]
@@ -241,13 +207,6 @@ impl ServerState {
       req_queue.outgoing.complete(response.id.clone())
     };
     handler(self, response)
-  }
-
-  pub async fn next_event(
-    &self,
-    inbox: &mut UnboundedReceiver<Message>,
-  ) -> Option<Event> {
-    inbox.recv().await.map(Event::Message)
   }
 
   /// Handle any changes and return a `bool` that indicates if there were

@@ -7,7 +7,6 @@ use deno_core::url::Position;
 use deno_core::url::Url;
 use deno_core::ModuleSpecifier;
 use lsp_server::Message;
-use lsp_server::Notification;
 use serde::de::DeserializeOwned;
 use std::error::Error;
 use std::fmt;
@@ -61,12 +60,6 @@ pub fn from_json<T: DeserializeOwned>(
 
 pub fn is_canceled(e: &(dyn Error + 'static)) -> bool {
   e.downcast_ref::<Canceled>().is_some()
-}
-
-pub fn notification_is<N: lsp_types::notification::Notification>(
-  notification: &Notification,
-) -> bool {
-  notification.method == N::METHOD
 }
 
 /// Normalizes a file name returned from the TypeScript compiler into a URI that
