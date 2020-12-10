@@ -3,8 +3,6 @@
 use super::analysis;
 use super::config::Config;
 use super::diagnostics::DiagnosticCollection;
-use super::diagnostics::DiagnosticSource;
-use super::diagnostics::DiagnosticVec;
 use super::memory_cache::MemoryCache;
 use super::sources::Sources;
 use super::tsc;
@@ -14,8 +12,6 @@ use crate::deno_dir;
 use crate::import_map::ImportMap;
 use crate::media_type::MediaType;
 
-use crossbeam_channel::select;
-use crossbeam_channel::unbounded;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use deno_core::error::anyhow;
@@ -81,7 +77,6 @@ pub fn update_import_map(state: &mut ServerState) -> Result<(), AnyError> {
 
 pub enum Event {
   Message(Message),
-  Task(Task),
 }
 
 impl fmt::Debug for Event {
@@ -103,18 +98,10 @@ impl fmt::Debug for Event {
           return debug_verbose_not(notification, f);
         }
       }
-      Event::Task(Task::Response(response)) => {
-        return f
-          .debug_struct("Response")
-          .field("id", &response.id)
-          .field("error", &response.error)
-          .finish();
-      }
       _ => (),
     }
     match self {
       Event::Message(it) => fmt::Debug::fmt(it, f),
-      Event::Task(it) => fmt::Debug::fmt(it, f),
     }
   }
 }
@@ -129,12 +116,6 @@ impl Default for Status {
   fn default() -> Self {
     Status::Loading
   }
-}
-
-#[derive(Debug)]
-pub enum Task {
-  Diagnostics((DiagnosticSource, DiagnosticVec)),
-  Response(Response),
 }
 
 #[derive(Debug, Clone)]
@@ -202,24 +183,21 @@ pub struct ServerStateSnapshot {
 
 pub struct ServerState {
   pub config: Config,
-  pub diagnostics: DiagnosticCollection,
+  pub diagnostics: Arc<Mutex<DiagnosticCollection>>,
   pub doc_data: HashMap<ModuleSpecifier, DocumentData>,
   pub file_cache: Arc<RwLock<MemoryCache>>,
   pub maybe_import_map: Option<Arc<RwLock<ImportMap>>>,
   pub maybe_import_map_uri: Option<Url>,
-  req_queue: Arc<Mutex<ReqQueue>>,
-  sender: Sender<Message>,
+  pub req_queue: Arc<Mutex<ReqQueue>>,
+  pub sender: Sender<Message>,
   pub sources: Arc<RwLock<Sources>>,
   pub shutdown_requested: bool,
   pub status: Status,
-  task_sender: Sender<Task>,
-  pub task_receiver: Receiver<Task>,
   pub ts_runtime: JsRuntime,
 }
 
 impl ServerState {
   pub fn new(sender: Sender<Message>, config: Config) -> Self {
-    let (task_sender, task_receiver) = unbounded();
     let custom_root = env::var("DENO_DIR").map(String::into).ok();
     let dir =
       deno_dir::DenoDir::new(custom_root).expect("could not access DENO_DIR");
@@ -242,16 +220,18 @@ impl ServerState {
       sources: Arc::new(RwLock::new(sources)),
       shutdown_requested: false,
       status: Default::default(),
-      task_receiver,
-      task_sender,
       ts_runtime,
     }
   }
 
-  pub fn cancel(&self, request_id: RequestId) {
-    let mut req_queue = self.req_queue.lock().unwrap();
+  pub fn cancel(
+    req_queue: Arc<Mutex<ReqQueue>>,
+    sender: Sender<Message>,
+    request_id: RequestId,
+  ) {
+    let mut req_queue = req_queue.lock().unwrap();
     if let Some(response) = req_queue.incoming.cancel(request_id) {
-      self.send(response.into());
+      sender.send(response.into()).unwrap();
     }
   }
 
@@ -264,10 +244,7 @@ impl ServerState {
   }
 
   pub fn next_event(&self, inbox: &Receiver<Message>) -> Option<Event> {
-    select! {
-      recv(inbox) -> msg => msg.ok().map(Event::Message),
-      recv(self.task_receiver) -> task => Some(Event::Task(task.unwrap())),
-    }
+    inbox.recv().ok().map(Event::Message)
   }
 
   /// Handle any changes and return a `bool` that indicates if there were
@@ -286,54 +263,47 @@ impl ServerState {
       .register(request.id.clone(), (request.method.clone(), received));
   }
 
-  pub fn respond(&self, response: Response) {
-    let mut req_queue = self.req_queue.lock().unwrap();
+  pub fn respond(
+    req_queue: Arc<Mutex<ReqQueue>>,
+    sender: Sender<Message>,
+    response: Response,
+  ) {
+    let mut req_queue = req_queue.lock().unwrap();
     if let Some((_, _)) = req_queue.incoming.complete(response.id.clone()) {
-      self.send(response.into());
+      sender.send(response.into()).unwrap();
     }
   }
 
-  fn send(&self, message: Message) {
-    self.sender.send(message).unwrap()
-  }
-
   pub fn send_notification<N: lsp_types::notification::Notification>(
-    &mut self,
+    sender: Sender<Message>,
     params: N::Params,
   ) {
     let notification = Notification::new(N::METHOD.to_string(), params);
-    self.send(notification.into());
+    sender.send(notification.into()).unwrap();
   }
 
   pub fn send_request<R: lsp_types::request::Request>(
-    &self,
+    req_queue: Arc<Mutex<ReqQueue>>,
+    sender: Sender<Message>,
     params: R::Params,
     handler: ReqHandler,
   ) {
-    let mut req_queue = self.req_queue.lock().unwrap();
+    let mut req_queue = req_queue.lock().unwrap();
     let request =
       req_queue
         .outgoing
         .register(R::METHOD.to_string(), params, handler);
-    self.send(request.into());
+    sender.send(request.into()).unwrap();
   }
 
   pub fn snapshot(&self) -> ServerStateSnapshot {
     ServerStateSnapshot {
       config: self.config.clone(),
-      diagnostics: self.diagnostics.clone(),
+      diagnostics: self.diagnostics.lock().unwrap().clone(),
       doc_data: self.doc_data.clone(),
       file_cache: Arc::clone(&self.file_cache),
       sources: Arc::clone(&self.sources),
     }
-  }
-
-  pub fn spawn<F>(&mut self, task: F)
-  where
-    F: FnOnce() -> Task + Send + 'static,
-  {
-    let sender = self.task_sender.clone();
-    tokio::task::spawn_blocking(move || sender.send(task()).unwrap());
   }
 
   pub fn transition(&mut self, new_status: Status) {

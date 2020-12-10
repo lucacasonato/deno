@@ -2,7 +2,6 @@
 
 use super::state::ServerState;
 use super::state::ServerStateSnapshot;
-use super::state::Task;
 use super::utils::from_json;
 use super::utils::is_canceled;
 
@@ -95,7 +94,11 @@ impl<'a> RequestDispatcher<'a> {
         ErrorCode::MethodNotFound as i32,
         "unknown request".to_string(),
       );
-      self.server_state.respond(response);
+      ServerState::respond(
+        self.server_state.req_queue.clone(),
+        self.server_state.sender.clone(),
+        response,
+      );
     }
   }
 
@@ -114,12 +117,18 @@ impl<'a> RequestDispatcher<'a> {
       Some(it) => it,
       None => return self,
     };
-    self.server_state.spawn({
-      let state = self.server_state.snapshot();
-      move || {
-        let result = f(state, params);
-        Task::Response(result_to_response::<R>(id, result))
-      }
+
+    let state = self.server_state.snapshot();
+    let req_queue = self.server_state.req_queue.clone();
+    let sender = self.server_state.sender.clone();
+
+    tokio::task::spawn_blocking(move || {
+      let result = f(state, params);
+      ServerState::respond(
+        req_queue,
+        sender,
+        result_to_response::<R>(id, result),
+      )
     });
 
     self
@@ -152,7 +161,11 @@ impl<'a> RequestDispatcher<'a> {
         format!("sync task {:?} panicked", R::METHOD),
       )
     })?;
-    self.server_state.respond(response);
+    ServerState::respond(
+      self.server_state.req_queue.clone(),
+      self.server_state.sender.clone(),
+      response,
+    );
     Ok(self)
   }
 
@@ -177,7 +190,11 @@ impl<'a> RequestDispatcher<'a> {
           ErrorCode::InvalidParams as i32,
           err.to_string(),
         );
-        self.server_state.respond(response);
+        ServerState::respond(
+          self.server_state.req_queue.clone(),
+          self.server_state.sender.clone(),
+          response,
+        );
         None
       }
     }

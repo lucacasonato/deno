@@ -23,9 +23,9 @@ use state::DocumentData;
 use state::Event;
 use state::ServerState;
 use state::Status;
-use state::Task;
 use text::apply_content_changes;
 
+use crate::tokio_util::create_basic_runtime;
 use crate::tsc_config::TsConfig;
 
 use crossbeam_channel::Receiver;
@@ -115,7 +115,8 @@ pub fn start() -> Result<(), AnyError> {
   )?;
 
   // listen for events and run the main loop
-  server_state.run(connection.receiver)?;
+  let mut runtime = create_basic_runtime();
+  runtime.block_on(server_state.run(connection.receiver))?;
 
   io_threads.join()?;
   info!("Stop language server");
@@ -135,26 +136,6 @@ impl ServerState {
         }
         Message::Response(response) => self.complete_request(response),
       },
-      Event::Task(mut task) => loop {
-        match task {
-          Task::Response(response) => self.respond(response),
-          Task::Diagnostics((source, diagnostics_per_file)) => {
-            for (file_id, version, diagnostics) in diagnostics_per_file {
-              self.diagnostics.set(
-                file_id,
-                source.clone(),
-                version,
-                diagnostics,
-              );
-            }
-          }
-        }
-
-        task = match self.task_receiver.try_recv() {
-          Ok(task) => task,
-          Err(_) => break,
-        };
-      },
     }
 
     // process server sent notifications, like diagnostics
@@ -164,23 +145,43 @@ impl ServerState {
     if self.process_changes() {
       debug!("process changes");
       let state = self.snapshot();
-      self.spawn(move || {
-        let diagnostics = diagnostics::generate_linting_diagnostics(&state);
-        Task::Diagnostics((DiagnosticSource::Lint, diagnostics))
+      let diagnostics_collection = self.diagnostics.clone();
+      tokio::task::spawn_blocking(move || {
+        let diagnostics_per_file =
+          diagnostics::generate_linting_diagnostics(&state);
+        let mut diagnostics_collection = diagnostics_collection.lock().unwrap();
+        for (file_id, version, diagnostics) in diagnostics_per_file {
+          diagnostics_collection.set(
+            file_id,
+            DiagnosticSource::Lint,
+            version,
+            diagnostics,
+          );
+        }
       });
       // TODO(@kitsonk) isolates do not have Send to be safely sent between
       // threads, so I am not sure this is the best way to handle queuing up of
       // getting the diagnostics from the isolate.
-      let state = self.snapshot();
-      let diagnostics =
-        diagnostics::generate_ts_diagnostics(&state, &mut self.ts_runtime)?;
-      self.spawn(move || {
-        Task::Diagnostics((DiagnosticSource::TypeScript, diagnostics))
-      });
+      {
+        let state = self.snapshot();
+        let diagnostics_collection = self.diagnostics.clone();
+        let diagnostics_per_file =
+          diagnostics::generate_ts_diagnostics(&state, &mut self.ts_runtime)?;
+        let mut diagnostics_collection = diagnostics_collection.lock().unwrap();
+        for (file_id, version, diagnostics) in diagnostics_per_file {
+          diagnostics_collection.set(
+            file_id,
+            DiagnosticSource::TypeScript,
+            version,
+            diagnostics,
+          );
+        }
+      }
     }
 
     // process any changes to the diagnostics
-    if let Some(diagnostic_changes) = self.diagnostics.take_changes() {
+    let mut diagnostics_collection = self.diagnostics.lock().unwrap();
+    if let Some(diagnostic_changes) = diagnostics_collection.take_changes() {
       debug!("diagnostics have changed");
       let state = self.snapshot();
       for file_id in diagnostic_changes {
@@ -191,8 +192,7 @@ impl ServerState {
         // disabled, otherwise the client will not clear down previous
         // diagnostics
         let mut diagnostics: Vec<Diagnostic> = if state.config.settings.lint {
-          self
-            .diagnostics
+          diagnostics_collection
             .diagnostics_for(file_id, DiagnosticSource::Lint)
             .cloned()
             .collect()
@@ -201,8 +201,7 @@ impl ServerState {
         };
         if state.config.settings.enable {
           diagnostics.extend(
-            self
-              .diagnostics
+            diagnostics_collection
               .diagnostics_for(file_id, DiagnosticSource::TypeScript)
               .cloned(),
           );
@@ -214,7 +213,10 @@ impl ServerState {
         } else {
           None
         };
-        self.send_notification::<lsp_types::notification::PublishDiagnostics>(
+        ServerState::send_notification::<
+          lsp_types::notification::PublishDiagnostics,
+        >(
+          self.sender.clone(),
           lsp_types::PublishDiagnosticsParams {
             uri,
             diagnostics,
@@ -242,7 +244,7 @@ impl ServerState {
         lsp_types::NumberOrString::Number(id) => id.into(),
         lsp_types::NumberOrString::String(id) => id.into(),
       };
-      state.cancel(id);
+      ServerState::cancel(state.req_queue.clone(), state.sender.clone(), id);
       Ok(())
     })?
     .on::<lsp_types::notification::DidOpenTextDocument>(|state, params| {
@@ -313,7 +315,9 @@ impl ServerState {
       Ok(())
     })?
     .on::<lsp_types::notification::DidChangeConfiguration>(|state, _params| {
-      state.send_request::<lsp_types::request::WorkspaceConfiguration>(
+      ServerState::send_request::<lsp_types::request::WorkspaceConfiguration>(
+        state.req_queue.clone(),
+        state.sender.clone(),
         lsp_types::ConfigurationParams {
           items: vec![lsp_types::ConfigurationItem {
             scope_uri: None,
@@ -333,13 +337,15 @@ impl ServerState {
                   error!("failed to update settings: {}", err);
                 }
                 if let Err(err) = update_import_map(state) {
-                  state
-                    .send_notification::<lsp_types::notification::ShowMessage>(
-                      lsp_types::ShowMessageParams {
-                        typ: lsp_types::MessageType::Warning,
-                        message: err.to_string(),
-                      },
-                    );
+                  ServerState::send_notification::<
+                    lsp_types::notification::ShowMessage,
+                  >(
+                    state.sender.clone(),
+                    lsp_types::ShowMessageParams {
+                      typ: lsp_types::MessageType::Warning,
+                      message: err.to_string(),
+                    },
+                  );
                 }
               }
             }
@@ -374,20 +380,28 @@ impl ServerState {
     self.register_request(&request, received);
 
     if self.shutdown_requested {
-      self.respond(Response::new_err(
-        request.id,
-        ErrorCode::InvalidRequest as i32,
-        "Shutdown already requested".to_string(),
-      ));
+      ServerState::respond(
+        self.req_queue.clone(),
+        self.sender.clone(),
+        Response::new_err(
+          request.id,
+          ErrorCode::InvalidRequest as i32,
+          "Shutdown already requested".to_string(),
+        ),
+      );
       return Ok(());
     }
 
     if self.status == Status::Loading && request.method != "shutdown" {
-      self.respond(Response::new_err(
-        request.id,
-        ErrorCode::ContentModified as i32,
-        "Deno Language Server is still loading...".to_string(),
-      ));
+      ServerState::respond(
+        self.req_queue.clone(),
+        self.sender.clone(),
+        Response::new_err(
+          request.id,
+          ErrorCode::ContentModified as i32,
+          "Deno Language Server is still loading...".to_string(),
+        ),
+      );
       return Ok(());
     }
 
@@ -418,10 +432,11 @@ impl ServerState {
   }
 
   /// Start consuming events from the provided receiver channel.
-  pub fn run(mut self, inbox: Receiver<Message>) -> Result<(), AnyError> {
+  pub async fn run(mut self, inbox: Receiver<Message>) -> Result<(), AnyError> {
     // Check to see if we need to setup the import map
     if let Err(err) = update_import_map(&mut self) {
-      self.send_notification::<lsp_types::notification::ShowMessage>(
+      ServerState::send_notification::<lsp_types::notification::ShowMessage>(
+        self.sender.clone(),
         lsp_types::ShowMessageParams {
           typ: lsp_types::MessageType::Warning,
           message: err.to_string(),
@@ -446,7 +461,9 @@ impl ServerState {
         serde_json::to_value(watch_registration_options).unwrap(),
       ),
     };
-    self.send_request::<lsp_types::request::RegisterCapability>(
+    ServerState::send_request::<lsp_types::request::RegisterCapability>(
+      self.req_queue.clone(),
+      self.sender.clone(),
       lsp_types::RegistrationParams {
         registrations: vec![registration],
       },
