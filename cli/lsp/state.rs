@@ -291,11 +291,12 @@ impl ServerState {
     params: R::Params,
     handler: ReqHandler,
   ) {
-    let mut req_queue = req_queue.lock().unwrap();
-    let request =
+    let request = {
+      let mut req_queue = req_queue.lock().unwrap();
       req_queue
         .outgoing
-        .register(R::METHOD.to_string(), params, handler);
+        .register(R::METHOD.to_string(), params, handler)
+    };
     sender.send(request.into()).unwrap();
   }
 

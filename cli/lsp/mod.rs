@@ -185,8 +185,11 @@ impl ServerState {
     }
 
     // process any changes to the diagnostics
-    let mut diagnostics_collection = self.diagnostics.lock().unwrap();
-    if let Some(diagnostic_changes) = diagnostics_collection.take_changes() {
+    let diagnostic_changes_res = {
+      let mut diagnostics_collection = self.diagnostics.lock().unwrap();
+      diagnostics_collection.take_changes()
+    };
+    if let Some(diagnostic_changes) = diagnostic_changes_res {
       debug!("diagnostics have changed");
       let state = self.snapshot();
       for file_id in diagnostic_changes {
@@ -197,7 +200,8 @@ impl ServerState {
         // disabled, otherwise the client will not clear down previous
         // diagnostics
         let mut diagnostics: Vec<Diagnostic> = if state.config.settings.lint {
-          diagnostics_collection
+          state
+            .diagnostics
             .diagnostics_for(file_id, DiagnosticSource::Lint)
             .cloned()
             .collect()
@@ -206,7 +210,8 @@ impl ServerState {
         };
         if state.config.settings.enable {
           diagnostics.extend(
-            diagnostics_collection
+            state
+              .diagnostics
               .diagnostics_for(file_id, DiagnosticSource::TypeScript)
               .cloned(),
           );
