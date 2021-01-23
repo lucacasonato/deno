@@ -374,7 +374,7 @@ async fn op_shutdown(
   Err(bad_resource_id())
 }
 
-struct TcpListenerResource {
+pub struct TcpListenerResource {
   listener: AsyncRefCell<TcpListener>,
   cancel: CancelHandle,
 }
