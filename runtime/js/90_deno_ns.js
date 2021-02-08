@@ -132,5 +132,7 @@
     symlinkSync: __bootstrap.fs.symlinkSync,
     HttpClient: __bootstrap.fetch.HttpClient,
     createHttpClient: __bootstrap.fetch.createHttpClient,
+    startHttp: __bootstrap.http.startHttp,
+    HttpServer: __bootstrap.http.HttpServer,
   };
 })(this);

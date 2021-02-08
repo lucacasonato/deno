@@ -333,8 +333,8 @@ async fn op_connect(
   }
 }
 
-struct TcpListenerResource {
-  listener: AsyncRefCell<TcpListener>,
+pub struct TcpListenerResource {
+  pub listener: AsyncRefCell<TcpListener>,
   cancel: CancelHandle,
 }
 

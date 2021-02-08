@@ -8,6 +8,7 @@ use deno_core::error::type_error;
 use deno_core::error::AnyError;
 use deno_core::error::{bad_resource_id, not_supported};
 use deno_core::futures::future::FutureExt;
+use deno_core::futures::Stream;
 use deno_core::serde_json;
 use deno_core::serde_json::json;
 use deno_core::serde_json::Value;
@@ -27,6 +28,7 @@ use std::cell::RefCell;
 use std::convert::TryInto;
 use std::io::Read;
 use std::io::Write;
+use std::pin::Pin;
 use std::rc::Rc;
 use tokio::io::split;
 use tokio::io::AsyncRead;
@@ -39,6 +41,7 @@ use tokio::net::tcp;
 use tokio::net::TcpStream;
 use tokio::process;
 use tokio_rustls as tls;
+use tokio_util::io::StreamReader;
 
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
@@ -336,6 +339,22 @@ impl Resource for ChildStderrResource {
   }
 }
 
+pub type BytesStream =
+  Pin<Box<dyn Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin>>;
+
+pub type HttpRequestBodyResource =
+  ReadOnlyResource<StreamReader<BytesStream, bytes::Bytes>>;
+
+impl Resource for HttpRequestBodyResource {
+  fn name(&self) -> Cow<str> {
+    "httpRequestBody".into()
+  }
+
+  fn close(self: Rc<Self>) {
+    self.cancel_read_ops();
+  }
+}
+
 pub type TcpStreamResource =
   FullDuplexResource<tcp::OwnedReadHalf, tcp::OwnedWriteHalf>;
 
@@ -526,6 +545,33 @@ impl Resource for StdFileResource {
   }
 }
 
+pub struct HttpResponseBodyResource {
+  writer: AsyncRefCell<hyper::body::Sender>,
+}
+
+impl HttpResponseBodyResource {
+  async fn write(self: &Rc<Self>, buf: &[u8]) -> Result<usize, AnyError> {
+    let mut body = RcRef::map(self, |r| &r.writer).borrow_mut().await;
+    let len = buf.len();
+    body.send_data(buf.to_vec().into()).await?;
+    Ok(len)
+  }
+}
+
+impl From<hyper::body::Sender> for HttpResponseBodyResource {
+  fn from(sender: hyper::body::Sender) -> Self {
+    Self {
+      writer: AsyncRefCell::new(sender),
+    }
+  }
+}
+
+impl Resource for HttpResponseBodyResource {
+  fn name(&self) -> Cow<str> {
+    "httpResponseBody".into()
+  }
+}
+
 pub fn op_read(
   state: Rc<RefCell<OpState>>,
   is_sync: bool,
@@ -583,6 +629,8 @@ async fn op_read_async(
   } else if let Some(s) = resource.downcast_rc::<TlsServerStreamResource>() {
     s.read(&mut buf).await?
   } else if let Some(s) = resource.downcast_rc::<UnixStreamResource>() {
+    s.read(&mut buf).await?
+  } else if let Some(s) = resource.downcast_rc::<HttpRequestBodyResource>() {
     s.read(&mut buf).await?
   } else if let Some(s) = resource.downcast_rc::<StdFileResource>() {
     s.read(&mut buf).await?
@@ -647,6 +695,8 @@ async fn op_write_async(
   } else if let Some(s) = resource.downcast_rc::<TlsServerStreamResource>() {
     s.write(&buf).await?
   } else if let Some(s) = resource.downcast_rc::<UnixStreamResource>() {
+    s.write(&buf).await?
+  } else if let Some(s) = resource.downcast_rc::<HttpResponseBodyResource>() {
     s.write(&buf).await?
   } else if let Some(s) = resource.downcast_rc::<StdFileResource>() {
     s.write(&buf).await?

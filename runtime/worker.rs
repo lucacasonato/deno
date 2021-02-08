@@ -135,6 +135,7 @@ impl MainWorker {
       ops::fs::init(js_runtime);
       ops::io::init(js_runtime);
       ops::net::init(js_runtime);
+      ops::http::init(js_runtime);
       ops::os::init(js_runtime);
       ops::permissions::init(js_runtime);
       ops::plugin::init(js_runtime);
