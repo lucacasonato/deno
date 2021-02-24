@@ -196,14 +196,12 @@ impl LanguageServer {
       let diagnostic_collection = diagnostic_collection.clone();
       async {
         let mark = self.performance.mark("prepare_diagnostics_ts");
-        let diagnostics = Some(
-          diagnostics::generate_ts_diagnostics(
-            state_snapshot,
-            diagnostic_collection,
-            &self.ts_server,
-          )
-          .await?,
-        );
+        let diagnostics = diagnostics::generate_ts_diagnostics(
+          state_snapshot,
+          diagnostic_collection,
+          &self.ts_server,
+        )
+        .await?;
         self.performance.measure(mark);
         Ok::<_, AnyError>(diagnostics)
       }
