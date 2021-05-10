@@ -212,16 +212,16 @@
       requiredArguments("WebSocket.send", arguments.length, 1);
 
       if (this.#readyState != OPEN) {
-        throw Error("readyState not OPEN");
+        throw new DOMException("readyState not OPEN", "InvalidStateError");
       }
 
       const sendTypedArray = (ta) => {
-        this.#bufferedAmount += ta.size;
+        this.#bufferedAmount += ta.byteLength;
         core.opAsync("op_ws_send", {
           rid: this.#rid,
           kind: "binary",
         }, ta).then(() => {
-          this.#bufferedAmount -= ta.size;
+          this.#bufferedAmount -= ta.byteLength;
         });
       };
 
@@ -242,13 +242,13 @@
       } else {
         const string = String(data);
         const d = core.encode(string);
-        this.#bufferedAmount += d.size;
+        this.#bufferedAmount += d.byteLength;
         core.opAsync("op_ws_send", {
           rid: this.#rid,
           kind: "text",
           text: string,
         }).then(() => {
-          this.#bufferedAmount -= d.size;
+          this.#bufferedAmount -= d.byteLength;
         });
       }
     }
