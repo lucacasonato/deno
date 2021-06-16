@@ -53,7 +53,7 @@
       if (nextRequest === null) return null;
 
       const [
-        requestBodyRid,
+        requestRid,
         responseSenderRid,
         method,
         headersList,
@@ -62,8 +62,8 @@
 
       /** @type {ReadableStream<Uint8Array> | undefined} */
       let body = null;
-      if (typeof requestBodyRid === "number") {
-        body = createRequestBodyStream(requestBodyRid);
+      if (typeof requestRid === "number") {
+        body = createRequestBodyStream(requestRid);
       }
 
       const innerRequest = newInnerRequest(
@@ -209,7 +209,7 @@
     };
   }
 
-  function createRequestBodyStream(requestBodyRid) {
+  function createRequestBodyStream(requestRid) {
     return new ReadableStream({
       type: "bytes",
       async pull(controller) {
@@ -218,7 +218,7 @@
           // stream.
           const chunk = new Uint8Array(16 * 1024 + 256);
           const read = await readRequest(
-            requestBodyRid,
+            requestRid,
             chunk,
           );
           if (read > 0) {
@@ -227,18 +227,18 @@
           } else {
             // We have reached the end of the body, so we close the stream.
             controller.close();
-            core.close(requestBodyRid);
+            core.close(requestRid);
           }
         } catch (err) {
           // There was an error while reading a chunk of the body, so we
           // error.
           controller.error(err);
           controller.close();
-          core.close(requestBodyRid);
+          core.close(requestRid);
         }
       },
       cancel() {
-        core.close(requestBodyRid);
+        core.close(requestRid);
       },
     });
   }
