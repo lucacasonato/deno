@@ -76,6 +76,9 @@ lazy_static::lazy_static! {
       },
       v8::ExternalReference {
         function: wasm_streaming_feed.map_fn_to()
+      },
+      v8::ExternalReference {
+        function: perform_microtask_checkpoint.map_fn_to()
       }
     ]);
 }
@@ -161,6 +164,12 @@ pub fn initialize_context<'s>(
     set_wasm_streaming_callback,
   );
   set_func(scope, core_val, "wasmStreamingFeed", wasm_streaming_feed);
+  set_func(
+    scope,
+    core_val,
+    "performMicrotaskCheckpoint",
+    perform_microtask_checkpoint,
+  );
 
   // Direct bindings on `window`.
   set_func(scope, global, "queueMicrotask", queue_microtask);
@@ -311,9 +320,6 @@ fn opcall<'s>(
   args: v8::FunctionCallbackArguments,
   mut rv: v8::ReturnValue,
 ) {
-  let state_rc = JsRuntime::state(scope);
-  let mut state = state_rc.borrow_mut();
-
   let op_id = match v8::Local::<v8::Integer>::try_from(args.get(0))
     .map(|l| l.value() as OpId)
     .map_err(AnyError::from)
@@ -325,10 +331,14 @@ fn opcall<'s>(
     }
   };
 
+  let state_rc = JsRuntime::state(scope);
+  let op_state = state_rc.borrow().op_state.clone();
+  // let mut state = state_rc.borrow_mut();
+
   // opcall(0) returns obj of all ops, handle as special case
   if op_id == 0 {
     // TODO: Serialize as HashMap when serde_v8 supports maps ...
-    let ops = OpTable::op_entries(state.op_state.clone());
+    let ops = OpTable::op_entries(op_state.clone());
     rv.set(to_v8(scope, ops).unwrap());
     return;
   }
@@ -362,16 +372,18 @@ fn opcall<'s>(
     b,
     promise_id,
   };
-  let op = OpTable::route_op(op_id, state.op_state.clone(), payload);
+  let op = OpTable::route_op(op_id, op_state.clone(), payload);
   match op {
     Op::Sync(result) => {
       rv.set(result.to_v8(scope).unwrap());
     }
     Op::Async(fut) => {
+      let mut state = state_rc.borrow_mut();
       state.pending_ops.push(fut);
       state.have_unpolled_ops = true;
     }
     Op::AsyncUnref(fut) => {
+      let mut state = state_rc.borrow_mut();
       state.pending_unref_ops.push(fut);
       state.have_unpolled_ops = true;
     }
@@ -906,6 +918,14 @@ fn deserialize(
       scope.throw_exception(exception);
     }
   };
+}
+
+fn perform_microtask_checkpoint(
+  scope: &mut v8::HandleScope,
+  _args: v8::FunctionCallbackArguments,
+  _rv: v8::ReturnValue,
+) {
+  scope.perform_microtask_checkpoint()
 }
 
 fn queue_microtask(

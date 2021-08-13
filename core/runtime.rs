@@ -398,6 +398,7 @@ impl JsRuntime {
     isolate.set_host_import_module_dynamically_callback(
       bindings::host_import_module_dynamically_callback,
     );
+    isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
     isolate
   }
 
@@ -530,7 +531,7 @@ impl JsRuntime {
       }
     };
 
-    match script.run(tc_scope) {
+    let res = match script.run(tc_scope) {
       Some(value) => {
         let value_handle = v8::Global::new(tc_scope, value);
         Ok(value_handle)
@@ -540,7 +541,11 @@ impl JsRuntime {
         let exception = tc_scope.exception().unwrap();
         exception_to_err_result(tc_scope, exception, false)
       }
-    }
+    };
+
+    tc_scope.perform_microtask_checkpoint();
+
+    res
   }
 
   /// Takes a snapshot. The isolate should have been created with will_snapshot
@@ -1010,6 +1015,7 @@ impl JsRuntime {
     // https://github.com/denoland/deno/issues/4908
     // https://v8.dev/features/top-level-await#module-execution-order
     let maybe_value = module.evaluate(scope);
+    scope.perform_microtask_checkpoint();
 
     // Update status after evaluating.
     status = module.get_status();
@@ -1034,7 +1040,6 @@ impl JsRuntime {
         promise: promise_global,
         sender,
       });
-      scope.perform_microtask_checkpoint();
     } else {
       assert!(status == v8::ModuleStatus::Errored);
     }

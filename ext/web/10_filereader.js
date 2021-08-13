@@ -14,7 +14,7 @@
 
 ((window) => {
   const webidl = window.__bootstrap.webidl;
-  const { forgivingBase64Encode } = window.__bootstrap.infra;
+  const { forgivingBase64Encode, queueTask } = window.__bootstrap.infra;
   const { decode, TextDecoder } = window.__bootstrap.encoding;
   const { parseMimeType } = window.__bootstrap.mimesniff;
   const { DOMException } = window.__bootstrap.domException;
@@ -107,8 +107,7 @@
 
             // 2. If chunkPromise is fulfilled, and isFirstChunk is true, queue a task to fire a progress event called loadstart at fr.
             if (isFirstChunk) {
-              // TODO(lucacasonato): this is wrong, should be HTML "queue a task"
-              queueMicrotask(() => {
+              queueTask(() => {
                 if (abortedState.aborted) return;
                 // fire a progress event for loadstart
                 const ev = new ProgressEvent("loadstart", {});
@@ -133,8 +132,7 @@
                 const ev = new ProgressEvent("progress", {
                   loaded: size,
                 });
-                // TODO(lucacasonato): this is wrong, should be HTML "queue a task"
-                queueMicrotask(() => {
+                queueTask(() => {
                   if (abortedState.aborted) return;
                   this.dispatchEvent(ev);
                 });
@@ -143,8 +141,7 @@
               chunkPromise = reader.read();
             } // 5 Otherwise, if chunkPromise is fulfilled with an object whose done property is true, queue a task to run the following steps and abort this algorithm:
             else if (chunk.done === true) {
-              // TODO(lucacasonato): this is wrong, should be HTML "queue a task"
-              queueMicrotask(() => {
+              queueTask(() => {
                 if (abortedState.aborted) return;
                 // 1. Set fr’s state to "done".
                 this[state] = "done";
@@ -237,8 +234,7 @@
               break;
             }
           } catch (err) {
-            // TODO(lucacasonato): this is wrong, should be HTML "queue a task"
-            queueMicrotask(() => {
+            queueTask(() => {
               if (abortedState.aborted) return;
 
               // chunkPromise rejected
