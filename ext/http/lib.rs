@@ -806,7 +806,17 @@ async fn op_http_write_resource(
       _ => {}
     };
 
-    let view = resource.clone().read(64 * 1024).await?; // 64KB
+    // 64KB
+    let view = match resource.clone().read(64 * 1024).await {
+      Ok(view) => view,
+      Err(error) => {
+        println!(
+          "[deno][op_http_write_resource] error reading upstream stream: {}",
+          error
+        );
+        break;
+      }
+    };
     if view.is_empty() {
       break;
     }
