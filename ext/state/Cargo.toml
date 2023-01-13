@@ -14,4 +14,5 @@ description = "Implementation of the Deno database API"
 path = "lib.rs"
 
 [dependencies]
+async-trait.workspace = true
 deno_core.workspace = true

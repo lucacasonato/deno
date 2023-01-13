@@ -35,6 +35,7 @@ use deno_core::SharedArrayBufferStore;
 use deno_core::Snapshot;
 use deno_core::SourceMapGetter;
 use deno_node::RequireNpmResolver;
+use deno_state::fake::FakeDbHandler;
 use deno_tls::rustls::RootCertStore;
 use deno_web::create_entangled_message_port;
 use deno_web::BlobStore;
@@ -436,6 +437,7 @@ impl WebWorker {
       ),
       deno_napi::init::<PermissionsContainer>(unstable),
       deno_node::init::<PermissionsContainer>(options.npm_resolver),
+      deno_state::init(FakeDbHandler),
       ops::os::init_for_worker(),
       ops::permissions::init(),
       ops::process::init(),

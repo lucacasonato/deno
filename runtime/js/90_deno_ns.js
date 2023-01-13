@@ -153,5 +153,8 @@
     serve: __bootstrap.flash.serve,
     upgradeHttp: __bootstrap.http.upgradeHttp,
     upgradeHttpRaw: __bootstrap.flash.upgradeHttpRaw,
+
+    openDatabase: __bootstrap.state.openDatabase,
+    Database: __bootstrap.state.Database,
   };
 })(this);

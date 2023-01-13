@@ -1176,6 +1176,7 @@ dependencies = [
  "deno_napi",
  "deno_net",
  "deno_node",
+ "deno_state",
  "deno_tls",
  "deno_url",
  "deno_web",
@@ -1214,6 +1215,7 @@ dependencies = [
 name = "deno_state"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deno_core",
 ]
 
