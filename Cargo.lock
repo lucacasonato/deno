@@ -1211,6 +1211,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "deno_state"
+version = "0.1.0"
+dependencies = [
+ "deno_core",
+]
+
+[[package]]
 name = "deno_task_shell"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

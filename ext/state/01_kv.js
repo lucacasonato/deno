@@ -1,0 +1,12 @@
+// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+
+"use strict";
+
+((window) => {
+  const core = Deno.core;
+  const ops = core.ops;
+
+  
+
+
+})(globalThis);

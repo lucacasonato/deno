@@ -23,6 +23,7 @@ members = [
   "ext/http",
   "ext/net",
   "ext/node",
+  "ext/state",
   "ext/url",
   "ext/web",
   "ext/webgpu",
