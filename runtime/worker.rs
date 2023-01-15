@@ -30,7 +30,7 @@ use deno_core::SharedArrayBufferStore;
 use deno_core::Snapshot;
 use deno_core::SourceMapGetter;
 use deno_node::RequireNpmResolver;
-use deno_state::fake::FakeDbHandler;
+use deno_state::sqlite::SqliteDbHandler;
 use deno_tls::rustls::RootCertStore;
 use deno_web::BlobStore;
 use log::debug;
@@ -269,7 +269,9 @@ impl MainWorker {
       ),
       deno_napi::init::<PermissionsContainer>(unstable),
       deno_node::init::<PermissionsContainer>(options.npm_resolver),
-      deno_state::init(FakeDbHandler),
+      deno_state::init(SqliteDbHandler {
+        default_storage_dir: options.origin_storage_dir.clone(),
+      }),
       ops::os::init(exit_code.clone()),
       ops::permissions::init(),
       ops::process::init(),

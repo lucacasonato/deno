@@ -1,0 +1,222 @@
+use std::num::NonZeroU32;
+
+use async_trait::async_trait;
+use deno_core::error::AnyError;
+use num_bigint::BigInt;
+
+#[async_trait(?Send)]
+pub trait DatabaseHandler {
+  type DB: Database + 'static;
+
+  async fn open(&self, path: Option<String>) -> Result<Self::DB, AnyError>;
+}
+
+#[async_trait(?Send)]
+pub trait Database {
+  async fn snapshot_read(
+    &self,
+    requests: Vec<ReadRange>,
+    options: SnapshotReadOptions,
+  ) -> Result<Vec<ReadRangeOutput>, AnyError>;
+
+  async fn atomic_write(&self, write: AtomicWrite) -> Result<bool, AnyError>;
+}
+
+/// Options for a snapshot read.
+pub struct SnapshotReadOptions {
+  pub consistency: Consistency,
+}
+
+/// The consistency of a read.
+pub enum Consistency {
+  Strong,
+}
+
+/// A key is for a KV pair. It is a vector of KeyParts.
+///
+/// The ordering of the keys is defined by the ordering of the KeyParts. The
+/// first KeyPart is the most significant, and the last KeyPart is the least
+/// significant.
+pub struct Key(pub Vec<KeyPart>);
+
+/// A key part is single item in a key. It can be a boolean, a double float, a
+/// variable precision signed integer, a UTF-8 string, or an arbitrary byte
+/// array.
+///
+/// The ordering of a KeyPart is dependent on the type of the KeyPart.
+///
+/// Between different types, the ordering is as follows: boolean < double float
+/// < variable precision signed integer < UTF-8 string < arbitrary byte array.
+///
+/// Within a type, the ordering is as follows:
+/// - For a **boolean**, false is less than true.
+/// - For a **double float**, the ordering must follow -Infinity < -NaN < -100.0 < -1.0 < -0.5 < -0.0 < 0.0 < 0.5 < 1.0 < 100.0 < NaN < Infinity.
+/// - For a **variable precision signed integer**, the ordering must follow mathematical ordering.
+/// - For a **UTF-8 string**, the ordering must follow the UTF-8 byte ordering.
+/// - For an **arbitrary byte array**, the ordering must follow the byte ordering.
+///
+/// This means that the key part `1.0` is less than the key part `2.0`, but is
+/// also less than the key part `0n`, because `1.0` is a double float and `0n`
+/// is a variable precision signed integer, and the ordering types obviously has
+/// precedence over the ordering within a type.
+pub enum KeyPart {
+  False,
+  True,
+  Float(f64),
+  Int(BigInt),
+  String(String),
+  Bytes(Vec<u8>),
+}
+
+/// A request to read a range of keys from the database. If `end` is `None`,
+/// then the range is from `start` shall also be used as the end of the range.
+///
+/// The range is inclusive of the start and exclusive of the end. The start may
+/// not be greater than the end.
+///
+/// The range is limited to `limit` number of entries.
+pub struct ReadRange {
+  pub start: Key,
+  pub end: Option<Key>,
+  pub limit: NonZeroU32,
+}
+
+/// A response to a `ReadRange` request.
+pub struct ReadRangeOutput {
+  pub entries: Vec<KvEntry>,
+}
+
+/// A versionstamp is a 12 byte array that is used to represent the version of
+/// a key in the database.
+type Versionstamp = [u8; 12];
+
+/// A key-value entry with a versionstamp.
+pub struct KvEntry {
+  pub key: Key,
+  pub value: Option<Value>,
+  pub versionstamp: Versionstamp,
+}
+
+/// A serialized value for a KV pair as stored in the database. All values
+/// **can** be serialized into the V8 representation, but not all values are.
+///
+/// The V8 representation is an opaque byte array that is only meaningful to
+/// the V8 engine. It is guaranteed to be backwards compatible. Because this
+/// representation is opaque, it is not possible to inspect or modify the value
+/// without deserializing it.
+///
+/// The inability to inspect or modify the value without deserializing it means
+/// that these values can not be quickly modified when performing atomic
+/// read-modify-write operations on the database (because the database may not
+/// have the ability to deserialize the V8 value into a modifiable value).
+///
+/// Because of this constraint, there are more specialized representations for
+/// certain types of values that can be used in atomic read-modify-write
+/// operations. These specialized representations are:
+///
+/// - **Boolean**: a boolean value.
+/// - **Float**: a double float value.
+/// - **Integer**: a variable precision signed integer value.
+/// - **Bytes**: an arbitrary byte array.
+pub enum Value {
+  V8(Vec<u8>),
+
+  Bool(bool),
+  Float(f64),
+  Int(BigInt),
+  Bytes(Vec<u8>),
+}
+
+/// A request to perform an atomic check-modify-write operation on the database.
+///
+/// The operation is performed atomically, meaning that the operation will
+/// either succeed or fail. If the operation fails, then the database will be
+/// left in the same state as before the operation was attempted. If the
+/// operation succeeds, then the database will be left in a new state.
+///
+/// The operation is performed by first checking the database for the current
+/// state of the keys, defined by the `checks` field. If the current state of
+/// the keys does not match the expected state, then the operation fails. If
+/// the current state of the keys matches the expected state, then the
+/// mutations are applied to the database.
+///
+/// All checks and mutations are performed atomically.
+///
+/// The mutations are performed in the order that they are specified in the
+/// `mutations` field. The order of checks is not specified, and is also not
+/// important.
+pub struct AtomicWrite {
+  pub checks: Vec<KvCheck>,
+  pub mutations: Vec<KvMutation>,
+}
+
+/// A request to perform a check on a key in the database. The check is not
+/// performed on the value of the key, but rather on the versionstamp of the
+/// key.
+pub struct KvCheck {
+  pub key: Key,
+  pub versionstamp: Versionstamp,
+}
+
+/// A request to perform a mutation on a key in the database. The mutation is
+/// performed on the value of the key.
+///
+/// The type of mutation is specified by the `kind` field. The action performed
+/// by each mutation kind is specified in the docs for [MutationKind].
+pub struct KvMutation {
+  pub key: Key,
+  pub kind: MutationKind,
+}
+
+/// The type of mutation to perform on a key in the database.
+///
+/// ## Set
+///
+/// The set mutation sets the value of the key to the specified value. It
+/// discards the previous value of the key, if any.
+///
+/// This operand supports all [Value] types.
+///
+/// ## Delete
+///
+/// The delete mutation deletes the value of the key.
+///
+/// ## Sum
+///
+/// The sum mutation adds the specified value to the existing value of the key.
+///
+/// This operand supports only value types [Value::Float] and [Value::Int]. The
+/// existing value in the database must match the type of the value specified in
+/// the mutation. If the key does not exist in the database, then the value
+/// specified in the mutation is used as the new value of the key.
+///
+/// ## Min
+///
+/// The min mutation sets the value of the key to the minimum of the existing
+/// value of the key and the specified value.
+///
+/// This operand supports only value types [Value::Float] and [Value::Int]. The
+/// existing value of the key in the database must match the type of the value
+/// specified in the mutation.
+///
+/// If no value exists for the key in the database, then the value specified in
+/// the mutation is used as the new value of the key.
+///
+/// ## Max
+///
+/// The max mutation sets the value of the key to the maximum of the existing
+/// value of the key and the specified value.
+///
+/// This operand supports only value types [Value::Float] and [Value::Int]. The
+/// existing value of the key in the database must match the type of the value
+/// specified in the mutation.
+///
+/// If no value exists for the key in the database, then the value specified in
+/// the mutation is used as the new value of the key.
+pub enum MutationKind {
+  Set(Value),
+  Delete,
+  Sum(Value),
+  Min(Value),
+  Max(Value),
+}

@@ -16,3 +16,7 @@ path = "lib.rs"
 [dependencies]
 async-trait.workspace = true
 deno_core.workspace = true
+num-bigint.workspace = true
+serde.workspace = true
+hex = "0.4"
+rusqlite.workspace = true

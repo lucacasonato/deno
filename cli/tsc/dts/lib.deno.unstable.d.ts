@@ -95,9 +95,8 @@ declare namespace Deno {
   type NativeVoidType = "void";
 
   /** **UNSTABLE**: New API, yet to be vetted.
-   * 
+   *
    * The native struct type for interfacing with foreign functions.
-   * 
    */
   type NativeStructType = { readonly struct: readonly NativeType[] };
 
@@ -164,7 +163,7 @@ declare namespace Deno {
    */
   type ToNativeResultType<T extends NativeResultType = NativeResultType> =
     T extends NativeStructType ? BufferSource
-    : ToNativeResultTypeMap[Exclude<T, NativeStructType>];
+      : ToNativeResultTypeMap[Exclude<T, NativeStructType>];
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
@@ -226,7 +225,7 @@ declare namespace Deno {
    */
   type FromNativeResultType<T extends NativeResultType = NativeResultType> =
     T extends NativeStructType ? Uint8Array
-    : FromNativeResultTypeMap[Exclude<T, NativeStructType>];
+      : FromNativeResultTypeMap[Exclude<T, NativeStructType>];
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
@@ -1720,6 +1719,449 @@ declare namespace Deno {
    * @category Runtime Environment
    */
   export function osUptime(): number;
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
+   * Open a database at the given path.
+   *
+   * If no path is given, a default path specific to the current storage key
+   * will be used. This default path is consistent across executions of the same
+   * program.
+   *
+   * ```ts
+   * const db = await Deno.openDatabase();
+   *
+   * await db.kv.set("hello", "world");
+   * const res = await db.kv.get("hello");
+   * console.log(res.value); // "world"
+   * ```
+   *
+   * Requires `allow-read` and `allow-write` permissions on explicit paths. The
+   * default database keyed on the current storage key does not require any
+   * permissions.
+   *
+   * ## Storage key
+   *
+   * The storage key is an identifier that is derived from the current program
+   * execution and is used to isolate the default database across programs.
+   *
+   * Deno determines the storage key using the following rules:
+   * - When using the `--location` flag, the origin for the location is used to
+   *   uniquely store the data. That means a location of
+   *   `http://example.com/a.ts` and `http://example.com/b.ts` and
+   *   `http://example.com:80/` would all share the same storage key, but
+   *   `https://example.com/` would be different.
+   * - If there is no location specifier, but there is an explicit or implicit
+   *   configuration file specified, the absolute path to that configuration
+   *   file is used as the storage key. That means
+   *   `deno run --config deno.jsonc a.ts` and
+   *   `deno run --config deno.jsonc b.ts` would share the same storage, but
+   *   `deno run --config tsconfig.json a.ts` would use a different storage key.
+   * - If there is no configuration or location specifier, Deno uses the
+   *   absolute path to the main module to derive a storage key. The Deno REPL
+   *   generates a "synthetic" main module that is based off the current working
+   *   directory where `deno` is started from. This means that multiple
+   *   invocations of the REPL from the same directory will share a storage key.
+   *
+   * @tags allow-read allow-write
+   * @category Database
+   */
+  export function openDatabase(path?: string): Promise<Deno.Database>;
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
+   * A database is a persistent key-value store and message queue.
+   *
+   * ```ts
+   * const db = await Deno.openDatabase();
+   *
+   * await db.kv.set("hello", "world");
+   * const res = await db.kv.get("hello");
+   * console.log(res.value); // "world"
+   * ```
+   *
+   * @category Database
+   */
+  export class Database {
+    /** Get a handle to the key-value store. */
+    readonly kv: Deno.KeyValueStore;
+    /** Get a handle to the message queue. */
+    readonly queue: Deno.Queue;
+
+    /** Create an atomic operation that can act on both the key-value store and
+     * the message queue atomically, based on the existing state of the
+     * key-value store. */
+    atomic(): Deno.AtomicOperation;
+
+    /** Close the database. */
+    close(): void;
+  }
+
+  type Key = KeyPart | KeyPart[];
+  type KeyPart = string | number | bigint | boolean | Uint8Array;
+
+  interface KeyValueEntry {
+    key: KeyPart[];
+    value: unknown | undefined;
+    versionstamp: string;
+  }
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
+   * A key-value store is an asynchronous persistent key-value store that can
+   * store arbitrary [serializable] JavaScript values.
+   *
+   * The keys of the KV store are arrays of key parts. The permitted part types
+   * are `string`, `number`, `bigint`, `boolean`, and `Uint8Array`. Part types
+   * can be mixed within a key.
+   *
+   * For ease of use, single part keys can be passed as a single value instead
+   * of an array of one part. These single part keys are equivalent to the
+   * array of one part keys. For example, the key `"hello"` is equivalent to
+   * the key `["hello"]`. Regardless of how the key is passed, the key will
+   * always be returned as an array of parts when retrieved.
+   *
+   * ```ts
+   * const db = await Deno.openDatabase();
+   *
+   * const kv = db.kv;
+   * await kv.set("hello", "world");
+   * const res = await kv.get("hello");
+   * console.log(res.value); // "world"
+   *
+   * await kv.clear("hello");
+   *
+   * await kv.set(["users", "1"], { name: "Jane" });
+   * const res2 = await kv.get(["users", "1"]);
+   * console.log(res2.value); // "Jane"
+   * ```
+   *
+   * ## Key values & sorting
+   *
+   * Keys are sorted lexically by their parts. For example, the key `["a", 1]`
+   * is sorted before the key `["a", 2]`, and the key `["a", 1]` is sorted
+   * before the key `["b", 0]`.
+   *
+   * Key types are sorted in the following order:
+   * 1. `boolean`
+   * 2. `number`
+   * 3. `bigint`
+   * 4. `string`
+   * 5. `Uint8Array`
+   *
+   * Within each type, the values are sorted as such:
+   * - `boolean`: `false` is sorted before `true`
+   * - `number`: sorted numerically, with
+   *   `-Infinity` < `-NaN` < `-1` < 0 < 1 < `NaN` < `Infinity`
+   * - `bigint`: sorted numerically
+   * - `string`: sorted byte-wise in UTF-8 encoding
+   * - `Uint8Array`: sorted byte-wise
+   *
+   * [serializable]: https://developer.mozilla.org/en-US/docs/Glossary/Serializable_object
+   *
+   * @category Database
+   */
+  export class KeyValueStore {
+    /** Get a value from the key-value store.
+     *
+     * If the key does not exist, the returned {@link KeyValueEntry} will have
+     * a `value` of `undefined`.
+     *
+     * ```ts
+     * const res = await kv.get("hello");
+     * console.log(res.value); // "world"
+     * ```
+     *
+     * @param key The key to get the value for. */
+    get(key: Key): Promise<KeyValueEntry>;
+
+    /** Set a value in the key-value store.
+     *
+     * If a value already exists for the key, it will be overwritten.
+     *
+     * Any serializable JavaScript value can be used as a value.
+     *
+     * ```ts
+     * await kv.set("hello", "world");
+     * ```
+     *
+     * @param key The key to set the value for.
+     * @param value The value to set. */
+    set(key: Key, value: unknown): Promise<void>;
+
+    /** Delete a value from the key-value store.
+     *
+     * ```ts
+     * await kv.delete("hello");
+     * ```
+     *
+     * @param key The key to delete the value for. */
+    delete(key: Key): Promise<void>;
+  }
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
+   * A message queue is an asynchronous persistent message queue that can store
+   * arbitrary [serializable] JavaScript values.
+   *
+   * Items are enqueued to the end of the queue, and dequeued from the front of
+   * the queue. The queue can be listened to from multiple clients at the same
+   * time, and each message will be delivered to exactly one client.
+   *
+   * If a client fails to process a message (the handler throws / rejects), the
+   * message will be requeued up to 5 times. After 5 failures, the message will
+   * be dropped permanently.
+   *
+   * ```ts
+   * const db = await Deno.openDatabase();
+   *
+   * const queue = db.queue;
+   *
+   * queue.listen((data) => {
+   *   console.log(data);
+   * });
+   *
+   * await queue.enqueue("hello world");
+   * ```
+   *
+   * [serializable]: https://developer.mozilla.org/en-US/docs/Glossary/Serializable_object
+   *
+   * @category Database
+   */
+  export class Queue {
+    /** Enqueue a value onto the queue.
+     *
+     * Any serializable JavaScript value can be used as a value.
+     *
+     * The returned promise will resolve once the value has been enqueued.
+     * **Note** that the value may not have not yet been dequeued (processed)
+     * when the promise resolves. Queue processing happens asynchronously.
+     *
+     * ```ts
+     * await queue.enqueue("hello world");
+     * ```
+     *
+     * @param value The value to enqueue. */
+    enqueue(value: unknown): Promise<void>;
+
+    /** Listen for messages on the queue.
+     *
+     * The handler will be called for each message that is dequeued from the
+     * queue. The handler will be called with the value that was enqueued.
+     *
+     * The handler can be an async function, and can return a promise. If the
+     * handler throws or rejects, the message will be requeued up to 5 times.
+     * After 5 failures, the message will be dropped permanently.
+     *
+     * ```ts
+     * queue.listen((data) => {
+     *   console.log(data);
+     * });
+     * ```
+     *
+     * @param handler The handler to call for each message. */
+    listen(handler: (data: unknown) => void | Promise<void>): void;
+  }
+
+  interface KeyValueCheck {
+    key: Key;
+    versionstamp: string;
+  }
+
+  type KeyValueMutation =
+    & { key: Key }
+    & (
+      | { type: "set"; value: unknown }
+      | { type: "delete" }
+      | { type: "sum"; value: number }
+      | { type: "min"; value: number }
+      | { type: "max"; value: number }
+    );
+
+  /** **UNSTABLE**: New API, yet to be vetted.
+   *
+   * An atomic operation on a {@linkcode Deno.Database}. An atomic operation can
+   * be used to mutate the key-value store and enqueue messages in a single
+   * atomic transaction.
+   *
+   * Atomic operations are not interactive transactions: checks and mutations
+   * need to be declared up front, and the transaction will be committed
+   * automatically if all checks pass.
+   *
+   * If all checks pass, all mutations will be performed in the order they were
+   * declared, and the atomic operation will return `true` from the
+   * {@linkcode Deno.AtomicOperation.commit} method.
+   *
+   * Checks are performed before mutations, and if any check fails, no mutations
+   * will be performed and the atomic operation will return `false` from the
+   * {@linkcode Deno.AtomicOperation.commit} method.
+   *
+   * One may want to retry an atomic operation if it fails, but usually with new
+   * check values.
+   *
+   * Checks are performed in the order they were declared. Checks do not compare
+   * keys by value, but by versionstamp. This has the side-effect that if a key
+   * had a change operation performed on it between the time the check was
+   * declared and the time the atomic operation was committed, but the value of
+   * the key did not change, the check will fail regardless of the value of the
+   * key.
+   *
+   * An atomic operation may have zero checks. In this case, the atomic
+   * operation will always return `true`, unless the entire operation fails due
+   * to a network error. This is useful for unconditionally performing a set of
+   * related mutations and enqueues atomically.
+   *
+   * ```ts
+   * const db = await Deno.openDatabase();
+   *
+   * let user = null;
+   * while (user === null) {
+   *   const res = await db.kv.get(["user", 1]);
+   *   if (res.value === null) { // if no user is registered
+   *     user = { name: "Jane" };
+   *     const success = await db.atomic()
+   *       .check(res) // check that the user has not been registered in the mean time
+   *       .set(["user", 1], user)
+   *       .enqueue({ kind: "user_registered", user_id: 1 })
+   *       .commit();
+   *     if (!success) user = null; // if the user was registered in the mean time, try fetching their profile again
+   *   } else {
+   *     user = res.value;
+   *   }
+   * }
+   * console.log(user); // { name: "Jane" }
+   * ```
+   *
+   * @category Database
+   */
+  export class AtomicOperation {
+    /** Check that the value of a key in the key-value store has not changed.
+     *
+     * The check will fail if the passed versionstamp does not match the current
+     * versionstamp of the key in the key-value store.
+     *
+     * ```ts
+     * const db = await Deno.openDatabase();
+     * const res = await db.kv.get(["user", 1]);
+     * const success = await db.atomic()
+     *   .check(res)
+     *   .set(["user", 1], { ...res.value, name: "Jane" })
+     *   .commit();
+     * ```
+     *
+     * @param checks The checks to perform. */
+    check(...checks: KeyValueCheck[]): this;
+
+    /** Apply a mutation to a key in the key-value store.
+     *
+     * The mutation will be applied to the key in the key-value store if all
+     * checks pass.
+     *
+     * There are five types of mutations:
+     * - `set`: Set the value of the key to the given value.
+     * - `delete`: Delete the key from the key-value store.
+     * - `sum`: Add the given value to the value of the key. The current value
+     *   of the key and given value must be a `number` or `bigint`.
+     * - `min`: Set the value of the key to the minimum of the current value of
+     *   the key and the given value. The current value of the key and given
+     *   value must be a `number` or `bigint`.
+     * - `max`: Set the value of the key to the maximum of the current value of
+     *   the key and the given value. The current value of the key and given
+     *   value must be a `number` or `bigint`.
+     *
+     * ```ts
+     * const db = await Deno.openDatabase();
+     * const res = await db.kv.get(["user", 1]);
+     * assert(res.value !== null);
+     * const success = await db.atomic()
+     *   .mutate({ key: ["user", 1], type: "set", value: { ...res.value, name: "Jane" } })
+     *   .commit();
+     * ```
+     *
+     * @param mutations The mutations to apply. */
+    mutate(...mutations: KeyValueMutation[]): this;
+
+    /** Set a key in the key-value store to the given value.
+     *
+     * The key will be set to the given value if all checks pass.
+     *
+     * ```ts
+     * const db = await Deno.openDatabase();
+     * const success = await db.atomic()
+     *   .set(["user", 1], { name: "Jane" })
+     *   .commit();
+     * ```
+     *
+     * @param key The key to set.
+     * @param value The value to set the key to. */
+    set(key: Key, value: unknown): this;
+
+    /** Delete a key from the key-value store.
+     *
+     * The key will be deleted if all checks pass.
+     *
+     * ```ts
+     * const db = await Deno.openDatabase();
+     * const res = await db.kv.get(["user", 1]);
+     * const success = await db.atomic()
+     *   .delete(["user", 1])
+     *   .commit();
+     * ```
+     *
+     * @param key The key to delete. */
+    delete(key: Key): this;
+
+    /** Enqueue a message to the queue.
+     *
+     * The message will be enqueued if all checks pass.
+     *
+     * ```ts
+     * const db = await Deno.openDatabase();
+     * const success = await db.atomic()
+     *   .enqueue({ kind: "form_submitted", message: "Hello, world!" })
+     *   .commit();
+     * ```
+     *
+     * @param data The data to enqueue. */
+    enqueue(data: unknown): this;
+
+    /** Commit the atomic operation.
+     *
+     * The atomic operation will be committed if all checks pass.
+     *
+     * This method will return `true` if the atomic operation was committed
+     * successfully, and `false` if the atomic operation was aborted due to a
+     * failed check. If the atomic operation was aborted due to an external
+     * failure, like a network error, this method will reject.
+     *
+     * It is often useful to retry the atomic operation if it fails due to a
+     * failed check. This can be done by re-fetching the keys that were checked
+     * and re-creating the atomic operation.
+     *
+     * ```ts
+     * const db = await Deno.openDatabase();
+     *
+     * // Fetch the user's profile, and register them if they are not registered.
+     * let user = null;
+     * while (user === undefined) {
+     *   const res = await db.kv.get(["user", 1]);
+     *   if (res.value === undefined) { // if no user is registered
+     *     user = { name: "Jane" };
+     *     const success = await db.atomic()
+     *       .check(res) // check that the user has not been registered in the mean time
+     *       .set(["user", 1], user)
+     *       .enqueue({ kind: "user_registered", user_id: 1 })
+     *       .commit();
+     *     if (!success) user = undefined; // if the user was registered in the mean time, try fetching their profile again
+     *   } else {
+     *     user = res.value;
+     *   }
+     * }
+     * console.log(user); // { name: "Jane" }
+     * ```
+     */
+    commit(): Promise<boolean>;
+  }
 }
 
 /** **UNSTABLE**: New API, yet to be vetted.

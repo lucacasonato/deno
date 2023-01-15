@@ -11,7 +11,7 @@ mod not_docs {
   use deno_cache::SqliteBackedCache;
   use deno_core::snapshot_util::*;
   use deno_core::Extension;
-  use deno_state::fake::FakeDbHandler;
+  use deno_state::sqlite::SqliteDbHandler;
 
   struct Permissions;
 
@@ -141,7 +141,9 @@ mod not_docs {
         false, // No --unstable.
       ),
       deno_node::init::<Permissions>(None),
-      deno_state::init(FakeDbHandler),
+      deno_state::init(SqliteDbHandler {
+        default_storage_dir: None,
+      }),
       deno_ffi::init::<Permissions>(false),
       deno_net::init::<Permissions>(
         None, false, // No --unstable.

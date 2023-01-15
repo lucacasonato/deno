@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use deno_core::snapshot_util::*;
 use deno_core::Extension;
 use deno_runtime::deno_cache::SqliteBackedCache;
-use deno_runtime::deno_state::fake::FakeDbHandler;
+use deno_runtime::deno_state::sqlite::SqliteDbHandler;
 use deno_runtime::permissions::PermissionsContainer;
 use deno_runtime::*;
 
@@ -321,7 +321,9 @@ fn create_cli_snapshot(snapshot_path: PathBuf, files: Vec<PathBuf>) {
       false, // No --unstable.
     ),
     deno_node::init::<PermissionsContainer>(None), // No --unstable.
-    deno_state::init(FakeDbHandler),
+    deno_state::init(SqliteDbHandler {
+      default_storage_dir: None,
+    }),
     deno_ffi::init::<PermissionsContainer>(false),
     deno_net::init::<PermissionsContainer>(
       None, false, // No --unstable.
