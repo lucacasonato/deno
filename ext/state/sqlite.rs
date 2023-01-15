@@ -93,6 +93,7 @@ impl DatabaseHandler for SqliteDbHandler {
         rusqlite::Connection::open(path)?
       }
       (None, Some(path)) => {
+        std::fs::create_dir_all(&path)?;
         let path = path.join("state.sqlite3");
         rusqlite::Connection::open(&path)?
       }
