@@ -1303,6 +1303,7 @@ dependencies = [
  "deno_napi",
  "deno_net",
  "deno_node",
+ "deno_state",
  "deno_tls",
  "deno_url",
  "deno_web",
@@ -1335,6 +1336,18 @@ dependencies = [
  "uuid",
  "winapi",
  "winres",
+]
+
+[[package]]
+name = "deno_state"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "deno_core",
+ "hex",
+ "num-bigint",
+ "rusqlite",
+ "serde",
 ]
 
 [[package]]
@@ -4189,6 +4202,7 @@ dependencies = [
  "bencher",
  "bytes",
  "derive_more",
+ "num-bigint",
  "serde",
  "serde_bytes",
  "serde_json",

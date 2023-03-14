@@ -10,6 +10,7 @@ use deno_core::Extension;
 use deno_core::ExtensionFileSource;
 use deno_core::ExtensionFileSourceCode;
 use deno_runtime::deno_cache::SqliteBackedCache;
+use deno_runtime::deno_state::sqlite::SqliteDbHandler;
 use deno_runtime::permissions::PermissionsContainer;
 use deno_runtime::*;
 
@@ -336,6 +337,9 @@ fn create_cli_snapshot(snapshot_path: PathBuf) {
       None, false, // No --unstable.
       None,
     ),
+    deno_state::init_ops(SqliteDbHandler {
+      default_storage_dir: None,
+    }),
     deno_napi::init_ops::<PermissionsContainer>(),
     deno_http::init_ops(),
     deno_flash::init_ops::<PermissionsContainer>(false), // No --unstable

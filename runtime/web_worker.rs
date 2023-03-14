@@ -34,6 +34,7 @@ use deno_core::Snapshot;
 use deno_core::SourceMapGetter;
 use deno_io::Stdio;
 use deno_node::RequireNpmResolver;
+use deno_state::sqlite::SqliteDbHandler;
 use deno_tls::rustls::RootCertStore;
 use deno_web::create_entangled_message_port;
 use deno_web::BlobStore;
@@ -438,6 +439,9 @@ impl WebWorker {
       deno_napi::init_ops::<PermissionsContainer>(),
       deno_node::init_polyfill_ops(),
       deno_node::init_ops::<PermissionsContainer>(options.npm_resolver),
+      deno_state::init_ops(SqliteDbHandler {
+        default_storage_dir: None,
+      }),
       ops::os::init_for_worker(),
       ops::permissions::init(),
       ops::process::init_ops(),

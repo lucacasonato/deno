@@ -163,7 +163,7 @@ declare namespace Deno {
    */
   type ToNativeResultType<T extends NativeResultType = NativeResultType> =
     T extends NativeStructType ? BufferSource
-    : ToNativeResultTypeMap[Exclude<T, NativeStructType>];
+      : ToNativeResultTypeMap[Exclude<T, NativeStructType>];
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
@@ -225,7 +225,7 @@ declare namespace Deno {
    */
   type FromNativeResultType<T extends NativeResultType = NativeResultType> =
     T extends NativeStructType ? Uint8Array
-    : FromNativeResultTypeMap[Exclude<T, NativeStructType>];
+      : FromNativeResultTypeMap[Exclude<T, NativeStructType>];
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
@@ -369,7 +369,10 @@ declare namespace Deno {
     /** Return the direct memory pointer to the typed array in memory. */
     static of(value: Deno.UnsafeCallback | BufferSource): PointerValue;
     /** Return a new pointer offset from the original by `offset` bytes. */
-    static offset(value: NonNullable<PointerValue>, offset: number): PointerValue
+    static offset(
+      value: NonNullable<PointerValue>,
+      offset: number,
+    ): PointerValue;
     /** Get the numeric value of a pointer */
     static value(value: PointerValue): number | bigint;
   }
@@ -427,7 +430,10 @@ declare namespace Deno {
     getCString(offset?: number): string;
     /** Gets a C string (`null` terminated string) at the specified byte offset
      * from the specified pointer. */
-    static getCString(pointer: NonNullable<PointerValue>, offset?: number): string;
+    static getCString(
+      pointer: NonNullable<PointerValue>,
+      offset?: number,
+    ): string;
     /** Gets an `ArrayBuffer` of length `byteLength` at the specified byte
      * offset from the pointer. */
     getArrayBuffer(byteLength: number, offset?: number): ArrayBuffer;
@@ -528,14 +534,14 @@ declare namespace Deno {
    * @category FFI
    */
   export class UnsafeCallback<
-    Definition extends UnsafeCallbackDefinition = UnsafeCallbackDefinition
+    Definition extends UnsafeCallbackDefinition = UnsafeCallbackDefinition,
   > {
     constructor(
       definition: Const<Definition>,
       callback: UnsafeCallbackFunction<
         Definition["parameters"],
         Definition["result"]
-      >
+      >,
     );
 
     /** The pointer to the unsafe callback. */
@@ -556,13 +562,13 @@ declare namespace Deno {
      * exists and is not unref'ed.
      */
     static threadSafe<
-      Definition extends UnsafeCallbackDefinition = UnsafeCallbackDefinition
+      Definition extends UnsafeCallbackDefinition = UnsafeCallbackDefinition,
     >(
       definition: Const<Definition>,
       callback: UnsafeCallbackFunction<
         Definition["parameters"],
         Definition["result"]
-      >
+      >,
     ): UnsafeCallback<Definition>;
 
     /**
@@ -1168,12 +1174,11 @@ declare namespace Deno {
    * Information for a HTTP request.
    *
    * @category HTTP Server
-  */
-   export interface ServeHandlerInfo {
-     /** The remote address of the connection. */
+   */
+  export interface ServeHandlerInfo {
+    /** The remote address of the connection. */
     remoteAddr: Deno.NetAddr;
   }
-
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *
@@ -1185,7 +1190,10 @@ declare namespace Deno {
    *
    * @category HTTP Server
    */
-  export type ServeHandler = (request: Request, info: ServeHandlerInfo) => Response | Promise<Response>;
+  export type ServeHandler = (
+    request: Request,
+    info: ServeHandlerInfo,
+  ) => Response | Promise<Response>;
 
   /** **UNSTABLE**: New API, yet to be vetted.
    *

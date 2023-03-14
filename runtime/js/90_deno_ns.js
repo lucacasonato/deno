@@ -23,6 +23,7 @@ import * as signals from "ext:runtime/40_signals.js";
 import * as tty from "ext:runtime/40_tty.js";
 // TODO(bartlomieju): this is funky we have two `http` imports
 import * as httpRuntime from "ext:runtime/40_http.js";
+//import * as state from "ext:deno_state/01_db.js";
 
 const denoNs = {
   metrics: core.metrics,
@@ -169,6 +170,8 @@ const denoNsUnstable = {
   funlockSync: fs.funlockSync,
   upgradeHttp: http.upgradeHttp,
   upgradeHttpRaw: flash.upgradeHttpRaw,
+  //openDatabase: state.openDatabase,
+  //Database: state.Database,
 };
 
 export { denoNs, denoNsUnstable };
