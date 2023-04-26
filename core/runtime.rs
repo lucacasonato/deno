@@ -3163,7 +3163,7 @@ pub mod tests {
   #[test]
   fn test_heap_limits() {
     let create_params =
-      v8::Isolate::create_params().heap_limits(0, 3 * 1024 * 1024);
+      v8::Isolate::create_params().heap_limits(0, 5 * 1024 * 1024);
     let mut runtime = JsRuntime::new(RuntimeOptions {
       create_params: Some(create_params),
       ..Default::default()
@@ -3207,7 +3207,7 @@ pub mod tests {
   #[test]
   fn test_heap_limit_cb_multiple() {
     let create_params =
-      v8::Isolate::create_params().heap_limits(0, 3 * 1024 * 1024);
+      v8::Isolate::create_params().heap_limits(0, 5 * 1024 * 1024);
     let mut runtime = JsRuntime::new(RuntimeOptions {
       create_params: Some(create_params),
       ..Default::default()
