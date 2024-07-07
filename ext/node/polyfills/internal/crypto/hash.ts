@@ -32,7 +32,6 @@ import type {
   Encoding,
 } from "ext:deno_node/internal/crypto/types.ts";
 import {
-  getKeyMaterial,
   KeyObject,
   prepareSecretKey,
 } from "ext:deno_node/internal/crypto/keys.ts";
@@ -218,6 +217,7 @@ class HmacImpl extends Transform {
     validateString(hmac, "hmac");
 
     const u8Key = key instanceof KeyObject
+      // FIXME
       ? getKeyMaterial(key)
       : prepareSecretKey(key, options?.encoding) as Buffer;
 

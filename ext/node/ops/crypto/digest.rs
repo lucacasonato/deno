@@ -67,7 +67,7 @@ macro_rules! match_fixed_digest {
         type $type = ::blake2::Blake2s256;
         $body
       }
-      _ => match_fixed_digest_with_eager_block_buffer!($algorithm_name, fn <$type>() $body, _ => $other)
+      _ => crate::ops::crypto::digest::match_fixed_digest_with_eager_block_buffer!($algorithm_name, fn <$type>() $body, _ => $other)
     }
   };
 }
@@ -84,7 +84,7 @@ macro_rules! match_fixed_digest_with_eager_block_buffer {
         type $type = crate::ops::crypto::md5_sha1::Md5Sha1;
         $body
       }
-      _ => match_fixed_digest_with_oid!($algorithm_name, fn <$type>() $body, _ => $other)
+      _ => crate::ops::crypto::digest::match_fixed_digest_with_oid!($algorithm_name, fn <$type>() $body, _ => $other)
     }
   };
 }
