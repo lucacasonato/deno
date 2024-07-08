@@ -23,8 +23,6 @@ import {
 } from "ext:deno_node/internal/crypto/util.ts";
 import {
   createSecretKey,
-  getKeyMaterial,
-  isKeyObject,
   KeyObject,
 } from "ext:deno_node/internal/crypto/keys.ts";
 import type { BinaryLike } from "ext:deno_node/internal/crypto/types.ts";
@@ -33,10 +31,11 @@ import {
   isAnyArrayBuffer,
   isArrayBufferView,
 } from "ext:deno_node/internal/util/types.ts";
+import { isKeyObject } from "ext:deno_node/internal/crypto/_keys.ts";
 
 const validateParameters = hideStackFrames((hash, key, salt, info, length) => {
   validateString(hash, "digest");
-  key = getKeyMaterial(prepareKey(key));
+  key = prepareKey(key);
   validateByteSource(salt, "salt");
   validateByteSource(info, "info");
 
