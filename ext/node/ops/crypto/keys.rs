@@ -11,10 +11,10 @@ use deno_core::op2;
 use deno_core::serde_v8::BigInt as V8BigInt;
 use deno_core::unsync::spawn_blocking;
 use deno_core::GarbageCollected;
+use deno_core::ToJsBuffer;
 use ed25519_dalek::pkcs8::BitStringRef;
 use num_bigint::BigInt;
 use num_traits::FromPrimitive as _;
-use once_cell::sync::Lazy;
 use pkcs8::DecodePrivateKey as _;
 use pkcs8::Document;
 use pkcs8::EncodePrivateKey as _;
@@ -35,7 +35,7 @@ use sec1::pem::PemLabel as _;
 use sec1::DecodeEcPrivateKey as _;
 use sec1::LineEnding;
 use spki::der::asn1;
-use spki::der::Decode as _;
+use spki::der::AnyRef;
 use spki::der::Encode as _;
 use spki::der::PemWriter;
 use spki::der::Reader as _;
@@ -43,11 +43,15 @@ use spki::DecodePublicKey as _;
 use spki::EncodePublicKey as _;
 use spki::SubjectPublicKeyInfoRef;
 
+use super::dh;
+use super::digest::match_fixed_digest_with_oid;
+use super::primes::Prime;
+
 #[derive(Clone)]
 pub enum KeyObjectHandle {
-  AsymmetricPrivateKey(AsymmetricPrivateKey),
-  AsymmetricPublicKey(AsymmetricPublicKey),
-  SecretKey(Box<[u8]>),
+  AsymmetricPrivate(AsymmetricPrivateKey),
+  AsymmetricPublic(AsymmetricPublicKey),
+  Secret(Box<[u8]>),
 }
 
 impl GarbageCollected for KeyObjectHandle {}
@@ -61,22 +65,55 @@ pub enum AsymmetricPrivateKey {
   X25519(x25519_dalek::StaticSecret),
   Ed25519(ed25519_dalek::SigningKey),
   #[allow(unused)]
-  Dh(Box<[u8]>),
+  Dh(dh::PrivateKey),
 }
 
 #[derive(Clone)]
 pub struct RsaPssPrivateKey {
   pub key: RsaPrivateKey,
-  pub hash_algorithm: RsaPssHashAlgorithm,
-  pub salt_length: u32,
+  pub details: Option<RsaPssDetails>,
 }
 
 #[derive(Clone, Copy)]
+pub struct RsaPssDetails {
+  pub hash_algorithm: RsaPssHashAlgorithm,
+  pub mf1_hash_algorithm: RsaPssHashAlgorithm,
+  pub salt_length: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RsaPssHashAlgorithm {
   Sha1,
+  Sha224,
   Sha256,
   Sha384,
   Sha512,
+  Sha512_224,
+  Sha512_256,
+}
+
+impl RsaPssHashAlgorithm {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      RsaPssHashAlgorithm::Sha1 => "sha1",
+      RsaPssHashAlgorithm::Sha224 => "sha224",
+      RsaPssHashAlgorithm::Sha256 => "sha256",
+      RsaPssHashAlgorithm::Sha384 => "sha384",
+      RsaPssHashAlgorithm::Sha512 => "sha512",
+      RsaPssHashAlgorithm::Sha512_224 => "sha512-224",
+      RsaPssHashAlgorithm::Sha512_256 => "sha512-256",
+    }
+  }
+
+  pub fn salt_length(&self) -> u32 {
+    match self {
+      RsaPssHashAlgorithm::Sha1 => 20,
+      RsaPssHashAlgorithm::Sha224 | RsaPssHashAlgorithm::Sha512_224 => 28,
+      RsaPssHashAlgorithm::Sha256 | RsaPssHashAlgorithm::Sha512_256 => 32,
+      RsaPssHashAlgorithm::Sha384 => 48,
+      RsaPssHashAlgorithm::Sha512 => 64,
+    }
+  }
 }
 
 #[derive(Clone)]
@@ -96,14 +133,13 @@ pub enum AsymmetricPublicKey {
   X25519(x25519_dalek::PublicKey),
   Ed25519(ed25519_dalek::VerifyingKey),
   #[allow(unused)]
-  Dh(Box<[u8]>),
+  Dh(dh::PublicKey),
 }
 
 #[derive(Clone)]
 pub struct RsaPssPublicKey {
   pub key: rsa::RsaPublicKey,
-  pub hash_algorithm: RsaPssHashAlgorithm,
-  pub salt_length: u32,
+  pub details: Option<RsaPssDetails>,
 }
 
 #[derive(Clone)]
@@ -117,7 +153,7 @@ impl KeyObjectHandle {
   /// Returns the private key if the handle is an asymmetric private key.
   pub fn as_private_key(&self) -> Option<&AsymmetricPrivateKey> {
     match self {
-      KeyObjectHandle::AsymmetricPrivateKey(key) => Some(key),
+      KeyObjectHandle::AsymmetricPrivate(key) => Some(key),
       _ => None,
     }
   }
@@ -126,10 +162,10 @@ impl KeyObjectHandle {
   /// a private key, it derives the public key from it and returns that.
   pub fn as_public_key(&self) -> Option<Cow<'_, AsymmetricPublicKey>> {
     match self {
-      KeyObjectHandle::AsymmetricPrivateKey(key) => {
+      KeyObjectHandle::AsymmetricPrivate(key) => {
         Some(Cow::Owned(key.to_public_key()))
       }
-      KeyObjectHandle::AsymmetricPublicKey(key) => Some(Cow::Borrowed(key)),
+      KeyObjectHandle::AsymmetricPublic(key) => Some(Cow::Borrowed(key)),
       _ => None,
     }
   }
@@ -137,7 +173,7 @@ impl KeyObjectHandle {
   /// Returns the secret key if the handle is a secret key.
   pub fn as_secret_key(&self) -> Option<&[u8]> {
     match self {
-      KeyObjectHandle::SecretKey(key) => Some(key),
+      KeyObjectHandle::Secret(key) => Some(key),
       _ => None,
     }
   }
@@ -177,8 +213,7 @@ impl RsaPssPrivateKey {
   pub fn to_public_key(&self) -> RsaPssPublicKey {
     RsaPssPublicKey {
       key: self.key.to_public_key(),
-      hash_algorithm: self.hash_algorithm,
-      salt_length: self.salt_length,
+      details: self.details,
     }
   }
 }
@@ -197,12 +232,19 @@ impl EcPrivateKey {
 // https://oidref.com/
 const ID_SHA1_OID: rsa::pkcs8::ObjectIdentifier =
   rsa::pkcs8::ObjectIdentifier::new_unwrap("1.3.14.3.2.26");
+const ID_SHA224_OID: rsa::pkcs8::ObjectIdentifier =
+  rsa::pkcs8::ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.4");
 const ID_SHA256_OID: rsa::pkcs8::ObjectIdentifier =
   rsa::pkcs8::ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
 const ID_SHA384_OID: rsa::pkcs8::ObjectIdentifier =
   rsa::pkcs8::ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.2");
 const ID_SHA512_OID: rsa::pkcs8::ObjectIdentifier =
   rsa::pkcs8::ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.3");
+const ID_SHA512_224_OID: rsa::pkcs8::ObjectIdentifier =
+  rsa::pkcs8::ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.5");
+const ID_SHA512_256_OID: rsa::pkcs8::ObjectIdentifier =
+  rsa::pkcs8::ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.6");
+
 const ID_MFG1: rsa::pkcs8::ObjectIdentifier =
   rsa::pkcs8::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.8");
 pub const ID_SECP224R1_OID: const_oid::ObjectIdentifier =
@@ -211,43 +253,6 @@ pub const ID_SECP256R1_OID: const_oid::ObjectIdentifier =
   const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 pub const ID_SECP384R1_OID: const_oid::ObjectIdentifier =
   const_oid::ObjectIdentifier::new_unwrap("1.3.132.0.34");
-
-// Default HashAlgorithm for RSASSA-PSS-params (sha1)
-//
-// sha1 HashAlgorithm ::= {
-//   algorithm   id-sha1,
-//   parameters  SHA1Parameters : NULL
-// }
-//
-// SHA1Parameters ::= NULL
-static SHA1_HASH_ALGORITHM: Lazy<rsa::pkcs8::AlgorithmIdentifierRef<'static>> =
-  Lazy::new(|| rsa::pkcs8::AlgorithmIdentifierRef {
-    // id-sha1
-    oid: ID_SHA1_OID,
-    // NULL
-    parameters: Some(asn1::AnyRef::from(asn1::Null)),
-  });
-
-// TODO(@littledivy): `pkcs8` should provide AlgorithmIdentifier to Any conversion.
-static ENCODED_SHA1_HASH_ALGORITHM: Lazy<Vec<u8>> =
-  Lazy::new(|| SHA1_HASH_ALGORITHM.to_der().unwrap());
-
-// Default MaskGenAlgrithm for RSASSA-PSS-params (mgf1SHA1)
-//
-// mgf1SHA1 MaskGenAlgorithm ::= {
-//   algorithm   id-mgf1,
-//   parameters  HashAlgorithm : sha1
-// }
-static MGF1_SHA1_MASK_ALGORITHM: Lazy<
-  rsa::pkcs8::AlgorithmIdentifierRef<'static>,
-> = Lazy::new(|| rsa::pkcs8::AlgorithmIdentifierRef {
-  // id-mgf1
-  oid: ID_MFG1,
-  // sha1
-  parameters: Some(
-    asn1::AnyRef::from_der(&ENCODED_SHA1_HASH_ALGORITHM).unwrap(),
-  ),
-});
 
 pub const RSA_ENCRYPTION_OID: const_oid::ObjectIdentifier =
   const_oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
@@ -274,10 +279,9 @@ pub const DH_KEY_AGREEMENT_OID: const_oid::ObjectIdentifier =
 //   trailerField       [3] TrailerField     DEFAULT trailerFieldBC
 // }
 pub struct RsaPssParameters<'a> {
-  pub hash_algorithm: rsa::pkcs8::AlgorithmIdentifierRef<'a>,
-  #[allow(dead_code)]
-  pub mask_gen_algorithm: rsa::pkcs8::AlgorithmIdentifierRef<'a>,
-  pub salt_length: u32,
+  pub hash_algorithm: Option<rsa::pkcs8::AlgorithmIdentifierRef<'a>>,
+  pub mask_gen_algorithm: Option<rsa::pkcs8::AlgorithmIdentifierRef<'a>>,
+  pub salt_length: Option<u32>,
 }
 
 // Context-specific tag number for hashAlgorithm.
@@ -305,8 +309,7 @@ impl<'a> TryFrom<rsa::pkcs8::der::asn1::AnyRef<'a>> for RsaPssParameters<'a> {
           pkcs8::der::TagMode::Explicit,
         )?
         .map(TryInto::try_into)
-        .transpose()?
-        .unwrap_or(*SHA1_HASH_ALGORITHM);
+        .transpose()?;
 
       let mask_gen_algorithm = decoder
         .context_specific::<rsa::pkcs8::AlgorithmIdentifierRef>(
@@ -314,8 +317,7 @@ impl<'a> TryFrom<rsa::pkcs8::der::asn1::AnyRef<'a>> for RsaPssParameters<'a> {
           pkcs8::der::TagMode::Explicit,
         )?
         .map(TryInto::try_into)
-        .transpose()?
-        .unwrap_or(*MGF1_SHA1_MASK_ALGORITHM);
+        .transpose()?;
 
       let salt_length = decoder
         .context_specific::<u32>(
@@ -323,8 +325,7 @@ impl<'a> TryFrom<rsa::pkcs8::der::asn1::AnyRef<'a>> for RsaPssParameters<'a> {
           pkcs8::der::TagMode::Explicit,
         )?
         .map(TryInto::try_into)
-        .transpose()?
-        .unwrap_or(20);
+        .transpose()?;
 
       Ok(Self {
         hash_algorithm,
@@ -429,29 +430,13 @@ impl KeyObjectHandle {
         AsymmetricPrivateKey::Rsa(private_key)
       }
       RSASSA_PSS_OID => {
-        let parameters = pk_info
-          .algorithm
-          .parameters
-          .ok_or_else(|| type_error("missing pss private key parameters"))?;
-        let params = RsaPssParameters::try_from(parameters)
-          .map_err(|_| type_error("malformed pss private key parameters"))?;
-
-        let hash_alg = params.hash_algorithm;
-        let hash_algorithm = match hash_alg.oid {
-          ID_SHA1_OID => RsaPssHashAlgorithm::Sha1,
-          ID_SHA256_OID => RsaPssHashAlgorithm::Sha256,
-          ID_SHA384_OID => RsaPssHashAlgorithm::Sha384,
-          ID_SHA512_OID => RsaPssHashAlgorithm::Sha512,
-          _ => return Err(type_error("unsupported pss hash algorithm")),
-        };
-
+        let details = parse_rsa_pss_params(pk_info.algorithm.parameters)?;
         let private_key =
           rsa::RsaPrivateKey::from_pkcs1_der(pk_info.private_key)
             .map_err(|_| type_error("invalid PKCS#1 private key"))?;
         AsymmetricPrivateKey::RsaPss(RsaPssPrivateKey {
           key: private_key,
-          hash_algorithm,
-          salt_length: params.salt_length,
+          details,
         })
       }
       DSA_OID => {
@@ -502,12 +487,12 @@ impl KeyObjectHandle {
         AsymmetricPrivateKey::Ed25519(ed25519_dalek::SigningKey::from(bytes))
       }
       DH_KEY_AGREEMENT_OID => AsymmetricPrivateKey::Dh(
-        pk_info.private_key.to_vec().into_boxed_slice(),
+        dh::PrivateKey::from_bytes(pk_info.private_key),
       ),
       _ => return Err(type_error("unsupported private key oid")),
     };
 
-    Ok(KeyObjectHandle::AsymmetricPrivateKey(private_key))
+    Ok(KeyObjectHandle::AsymmetricPrivate(private_key))
   }
 
   pub fn new_asymmetric_public_key_from_js(
@@ -580,29 +565,13 @@ impl KeyObjectHandle {
         AsymmetricPublicKey::Rsa(public_key)
       }
       RSASSA_PSS_OID => {
-        let parameters = spki
-          .algorithm
-          .parameters
-          .ok_or_else(|| type_error("missing pss public key parameters"))?;
-        let params = RsaPssParameters::try_from(parameters)
-          .map_err(|_| type_error("malformed pss public key parameters"))?;
-
-        let hash_alg = params.hash_algorithm;
-        let hash_algorithm = match hash_alg.oid {
-          ID_SHA1_OID => RsaPssHashAlgorithm::Sha1,
-          ID_SHA256_OID => RsaPssHashAlgorithm::Sha256,
-          ID_SHA384_OID => RsaPssHashAlgorithm::Sha384,
-          ID_SHA512_OID => RsaPssHashAlgorithm::Sha512,
-          _ => return Err(type_error("unsupported pss hash algorithm")),
-        };
-
+        let details = parse_rsa_pss_params(spki.algorithm.parameters)?;
         let public_key = RsaPublicKey::from_pkcs1_der(
           spki.subject_public_key.as_bytes().unwrap(),
         )?;
         AsymmetricPublicKey::RsaPss(RsaPssPublicKey {
           key: public_key,
-          hash_algorithm,
-          salt_length: params.salt_length,
+          details,
         })
       }
       DSA_OID => {
@@ -658,19 +627,74 @@ impl KeyObjectHandle {
           .map_err(|_| type_error("ed25519 public key is malformed"))?;
         AsymmetricPublicKey::Ed25519(verifying_key)
       }
-      DH_KEY_AGREEMENT_OID => AsymmetricPublicKey::Dh(
-        spki
-          .subject_public_key
-          .as_bytes()
-          .unwrap()
-          .to_vec()
-          .into_boxed_slice(),
-      ),
+      DH_KEY_AGREEMENT_OID => {
+        let Some(subject_public_key) = spki.subject_public_key.as_bytes()
+        else {
+          return Err(type_error("malformed or missing public key in dh spki"));
+        };
+        AsymmetricPublicKey::Dh(dh::PublicKey::from_bytes(subject_public_key))
+      }
       _ => return Err(type_error("unsupported public key oid")),
     };
 
-    Ok(KeyObjectHandle::AsymmetricPublicKey(public_key))
+    Ok(KeyObjectHandle::AsymmetricPublic(public_key))
   }
+}
+
+fn parse_rsa_pss_params(
+  parameters: Option<AnyRef<'_>>,
+) -> Result<Option<RsaPssDetails>, deno_core::anyhow::Error> {
+  let details = if let Some(parameters) = parameters {
+    let params = RsaPssParameters::try_from(parameters)
+      .map_err(|_| type_error("malformed pss private key parameters"))?;
+
+    let hash_algorithm = match params.hash_algorithm.map(|k| k.oid) {
+      Some(ID_SHA1_OID) => RsaPssHashAlgorithm::Sha1,
+      Some(ID_SHA224_OID) => RsaPssHashAlgorithm::Sha224,
+      Some(ID_SHA256_OID) => RsaPssHashAlgorithm::Sha256,
+      Some(ID_SHA384_OID) => RsaPssHashAlgorithm::Sha384,
+      Some(ID_SHA512_OID) => RsaPssHashAlgorithm::Sha512,
+      Some(ID_SHA512_224_OID) => RsaPssHashAlgorithm::Sha512_224,
+      Some(ID_SHA512_256_OID) => RsaPssHashAlgorithm::Sha512_256,
+      None => RsaPssHashAlgorithm::Sha1,
+      _ => return Err(type_error("unsupported pss hash algorithm")),
+    };
+
+    let mf1_hash_algorithm = match params.mask_gen_algorithm {
+      Some(alg) => {
+        if alg.oid != ID_MFG1 {
+          return Err(type_error("unsupported pss mask gen algorithm"));
+        }
+        let params = alg.parameters_oid().map_err(|_| {
+          type_error("malformed or missing pss mask gen algorithm parameters")
+        })?;
+        match params {
+          ID_SHA1_OID => RsaPssHashAlgorithm::Sha1,
+          ID_SHA224_OID => RsaPssHashAlgorithm::Sha224,
+          ID_SHA256_OID => RsaPssHashAlgorithm::Sha256,
+          ID_SHA384_OID => RsaPssHashAlgorithm::Sha384,
+          ID_SHA512_OID => RsaPssHashAlgorithm::Sha512,
+          ID_SHA512_224_OID => RsaPssHashAlgorithm::Sha512_224,
+          ID_SHA512_256_OID => RsaPssHashAlgorithm::Sha512_256,
+          _ => return Err(type_error("unsupported pss mask gen algorithm")),
+        }
+      }
+      None => hash_algorithm,
+    };
+
+    let salt_length = params
+      .salt_length
+      .unwrap_or_else(|| hash_algorithm.salt_length());
+
+    Some(RsaPssDetails {
+      hash_algorithm,
+      mf1_hash_algorithm,
+      salt_length,
+    })
+  } else {
+    None
+  };
+  Ok(details)
 }
 
 impl AsymmetricPublicKey {
@@ -685,11 +709,9 @@ impl AsymmetricPublicKey {
             .into_boxed_slice();
           Ok(der)
         }
-        _ => {
-          return Err(type_error(
-            "exporting non-RSA public key as PKCS#1 is not supported",
-          ))
-        }
+        _ => Err(type_error(
+          "exporting non-RSA public key as PKCS#1 is not supported",
+        )),
       },
       "spki" => {
         let der = match self {
@@ -759,14 +781,16 @@ impl AsymmetricPublicKey {
             return Ok(der);
           }
           AsymmetricPublicKey::Dh(key) => {
-            let spki = SubjectPublicKeyInfoRef {
-              algorithm: rsa::pkcs8::AlgorithmIdentifierRef {
-                oid: DH_KEY_AGREEMENT_OID,
-                parameters: None,
-              },
-              subject_public_key: BitStringRef::from_bytes(key)
-                .map_err(|_| type_error("invalid DH public key"))?,
-            };
+            let public_key_bytes = key.clone().into_vec();
+            let spki =
+              SubjectPublicKeyInfoRef {
+                algorithm: rsa::pkcs8::AlgorithmIdentifierRef {
+                  oid: DH_KEY_AGREEMENT_OID,
+                  parameters: None,
+                },
+                subject_public_key: BitStringRef::from_bytes(&public_key_bytes)
+                  .map_err(|_| type_error("invalid DH public key"))?,
+              };
             let der = spki
               .to_der()
               .map_err(|_| type_error("invalid DH public key"))?
@@ -776,7 +800,7 @@ impl AsymmetricPublicKey {
         };
         Ok(der.into_vec().into_boxed_slice())
       }
-      _ => return Err(type_error(format!("unsupported key type: {}", typ))),
+      _ => Err(type_error(format!("unsupported key type: {}", typ))),
     }
   }
 }
@@ -794,11 +818,9 @@ impl AsymmetricPrivateKey {
             .into_boxed_slice();
           Ok(der)
         }
-        _ => {
-          return Err(type_error(
-            "exporting non-RSA private key as PKCS#1 is not supported",
-          ))
-        }
+        _ => Err(type_error(
+          "exporting non-RSA private key as PKCS#1 is not supported",
+        )),
       },
       "sec1" => match self {
         AsymmetricPrivateKey::Ec(key) => {
@@ -810,11 +832,9 @@ impl AsymmetricPrivateKey {
           .map_err(|_| type_error("invalid EC private key"))?;
           Ok(sec1.to_vec().into_boxed_slice())
         }
-        _ => {
-          return Err(type_error(
-            "exporting non-EC private key as SEC1 is not supported",
-          ))
-        }
+        _ => Err(type_error(
+          "exporting non-EC private key as SEC1 is not supported",
+        )),
       },
       "pkcs8" => {
         let der = match self {
@@ -876,12 +896,13 @@ impl AsymmetricPrivateKey {
               .into_boxed_slice()
           }
           AsymmetricPrivateKey::Dh(key) => {
+            let private_key = key.clone().into_vec();
             let private_key = PrivateKeyInfo {
               algorithm: rsa::pkcs8::AlgorithmIdentifierRef {
                 oid: DH_KEY_AGREEMENT_OID,
                 parameters: None,
               },
-              private_key: &*key,
+              private_key: &private_key,
               public_key: None,
             };
 
@@ -894,7 +915,7 @@ impl AsymmetricPrivateKey {
 
         Ok(der)
       }
-      _ => return Err(type_error(format!("unsupported key type: {}", typ))),
+      _ => Err(type_error(format!("unsupported key type: {}", typ))),
     }
   }
 }
@@ -930,7 +951,7 @@ pub fn op_node_create_public_key(
 pub fn op_node_create_secret_key(
   #[buffer(copy)] key: Box<[u8]>,
 ) -> KeyObjectHandle {
-  KeyObjectHandle::SecretKey(key)
+  KeyObjectHandle::Secret(key)
 }
 
 #[op2]
@@ -939,35 +960,35 @@ pub fn op_node_get_asymmetric_key_type(
   #[cppgc] handle: &KeyObjectHandle,
 ) -> Result<&'static str, AnyError> {
   match handle {
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::Rsa(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::Rsa(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::Rsa(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::Rsa(_)) => {
       Ok("rsa")
     }
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::RsaPss(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::RsaPss(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::RsaPss(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::RsaPss(_)) => {
       Ok("rsa-pss")
     }
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::Dsa(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::Dsa(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::Dsa(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::Dsa(_)) => {
       Ok("dsa")
     }
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::Ec(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::Ec(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::Ec(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::Ec(_)) => {
       Ok("ec")
     }
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::X25519(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::X25519(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::X25519(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::X25519(_)) => {
       Ok("x25519")
     }
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::Ed25519(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::Ed25519(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::Ed25519(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::Ed25519(_)) => {
       Ok("ed25519")
     }
-    KeyObjectHandle::AsymmetricPrivateKey(AsymmetricPrivateKey::Dh(_))
-    | KeyObjectHandle::AsymmetricPublicKey(AsymmetricPublicKey::Dh(_)) => {
+    KeyObjectHandle::AsymmetricPrivate(AsymmetricPrivateKey::Dh(_))
+    | KeyObjectHandle::AsymmetricPublic(AsymmetricPublicKey::Dh(_)) => {
       Ok("dh")
     }
-    KeyObjectHandle::SecretKey(_) => {
+    KeyObjectHandle::Secret(_) => {
       Err(type_error("symmetric key is not an asymmetric key"))
     }
   }
@@ -986,7 +1007,13 @@ pub enum AsymmetricKeyDetails {
     modulus_length: usize,
     public_exponent: V8BigInt,
     hash_algorithm: &'static str,
+    mgf1_hash_algorithm: &'static str,
     salt_length: u32,
+  },
+  #[serde(rename = "rsaPss")]
+  RsaPssBasic {
+    modulus_length: usize,
+    public_exponent: V8BigInt,
   },
   #[serde(rename_all = "camelCase")]
   Dsa {
@@ -1008,7 +1035,7 @@ pub fn op_node_get_asymmetric_key_details(
   #[cppgc] handle: &KeyObjectHandle,
 ) -> Result<AsymmetricKeyDetails, AnyError> {
   match handle {
-    KeyObjectHandle::AsymmetricPrivateKey(private_key) => match private_key {
+    KeyObjectHandle::AsymmetricPrivate(private_key) => match private_key {
       AsymmetricPrivateKey::Rsa(key) => {
         let modulus_length = key.n().bits();
         let public_exponent =
@@ -1024,18 +1051,21 @@ pub fn op_node_get_asymmetric_key_details(
           num_bigint::Sign::Plus,
           &key.key.e().to_bytes_be(),
         );
-        let hash_algorithm = match key.hash_algorithm {
-          RsaPssHashAlgorithm::Sha1 => "sha1",
-          RsaPssHashAlgorithm::Sha256 => "sha256",
-          RsaPssHashAlgorithm::Sha384 => "sha384",
-          RsaPssHashAlgorithm::Sha512 => "sha512",
+        let public_exponent = V8BigInt::from(public_exponent);
+        let details = match key.details {
+          Some(details) => AsymmetricKeyDetails::RsaPss {
+            modulus_length,
+            public_exponent,
+            hash_algorithm: details.hash_algorithm.as_str(),
+            mgf1_hash_algorithm: details.mf1_hash_algorithm.as_str(),
+            salt_length: details.salt_length,
+          },
+          None => AsymmetricKeyDetails::RsaPssBasic {
+            modulus_length,
+            public_exponent,
+          },
         };
-        Ok(AsymmetricKeyDetails::RsaPss {
-          modulus_length,
-          public_exponent: V8BigInt::from(public_exponent),
-          hash_algorithm,
-          salt_length: key.salt_length,
-        })
+        Ok(details)
       }
       AsymmetricPrivateKey::Dsa(key) => {
         let components = key.verifying_key().components();
@@ -1058,7 +1088,7 @@ pub fn op_node_get_asymmetric_key_details(
       AsymmetricPrivateKey::Ed25519(_) => Ok(AsymmetricKeyDetails::Ed25519),
       AsymmetricPrivateKey::Dh(_) => Ok(AsymmetricKeyDetails::Dh),
     },
-    KeyObjectHandle::AsymmetricPublicKey(public_key) => match public_key {
+    KeyObjectHandle::AsymmetricPublic(public_key) => match public_key {
       AsymmetricPublicKey::Rsa(key) => {
         let modulus_length = key.n().bits();
         let public_exponent =
@@ -1074,18 +1104,21 @@ pub fn op_node_get_asymmetric_key_details(
           num_bigint::Sign::Plus,
           &key.key.e().to_bytes_be(),
         );
-        let hash_algorithm = match key.hash_algorithm {
-          RsaPssHashAlgorithm::Sha1 => "sha1",
-          RsaPssHashAlgorithm::Sha256 => "sha256",
-          RsaPssHashAlgorithm::Sha384 => "sha384",
-          RsaPssHashAlgorithm::Sha512 => "sha512",
+        let public_exponent = V8BigInt::from(public_exponent);
+        let details = match key.details {
+          Some(details) => AsymmetricKeyDetails::RsaPss {
+            modulus_length,
+            public_exponent,
+            hash_algorithm: details.hash_algorithm.as_str(),
+            mgf1_hash_algorithm: details.mf1_hash_algorithm.as_str(),
+            salt_length: details.salt_length,
+          },
+          None => AsymmetricKeyDetails::RsaPssBasic {
+            modulus_length,
+            public_exponent,
+          },
         };
-        Ok(AsymmetricKeyDetails::RsaPss {
-          modulus_length,
-          public_exponent: V8BigInt::from(public_exponent),
-          hash_algorithm,
-          salt_length: key.salt_length,
-        })
+        Ok(details)
       }
       AsymmetricPublicKey::Dsa(key) => {
         let components = key.components();
@@ -1108,7 +1141,7 @@ pub fn op_node_get_asymmetric_key_details(
       AsymmetricPublicKey::Ed25519(_) => Ok(AsymmetricKeyDetails::Ed25519),
       AsymmetricPublicKey::Dh(_) => Ok(AsymmetricKeyDetails::Dh),
     },
-    KeyObjectHandle::SecretKey(_) => {
+    KeyObjectHandle::Secret(_) => {
       Err(type_error("symmetric key is not an asymmetric key"))
     }
   }
@@ -1120,13 +1153,13 @@ pub fn op_node_get_symmetric_key_size(
   #[cppgc] handle: &KeyObjectHandle,
 ) -> Result<usize, AnyError> {
   match handle {
-    KeyObjectHandle::AsymmetricPrivateKey(_) => {
+    KeyObjectHandle::AsymmetricPrivate(_) => {
       Err(type_error("asymmetric key is not a symmetric key"))
     }
-    KeyObjectHandle::AsymmetricPublicKey(_) => {
+    KeyObjectHandle::AsymmetricPublic(_) => {
       Err(type_error("asymmetric key is not a symmetric key"))
     }
-    KeyObjectHandle::SecretKey(key) => Ok(key.len() * 8),
+    KeyObjectHandle::Secret(key) => Ok(key.len() * 8),
   }
 }
 
@@ -1135,7 +1168,7 @@ pub fn op_node_get_symmetric_key_size(
 pub fn op_node_generate_secret_key(#[smi] len: usize) -> KeyObjectHandle {
   let mut key = vec![0u8; len];
   thread_rng().fill_bytes(&mut key);
-  KeyObjectHandle::SecretKey(key.into_boxed_slice())
+  KeyObjectHandle::Secret(key.into_boxed_slice())
 }
 
 #[op2(async)]
@@ -1146,7 +1179,7 @@ pub async fn op_node_generate_secret_key_async(
   spawn_blocking(move || {
     let mut key = vec![0u8; len];
     thread_rng().fill_bytes(&mut key);
-    KeyObjectHandle::SecretKey(key.into_boxed_slice())
+    KeyObjectHandle::Secret(key.into_boxed_slice())
   })
   .await
   .unwrap()
@@ -1165,10 +1198,10 @@ impl KeyObjectHandlePair {
     public_key: AsymmetricPublicKey,
   ) -> Self {
     Self {
-      private_key: RefCell::new(Some(KeyObjectHandle::AsymmetricPrivateKey(
+      private_key: RefCell::new(Some(KeyObjectHandle::AsymmetricPrivate(
         private_key,
       ))),
-      public_key: RefCell::new(Some(KeyObjectHandle::AsymmetricPublicKey(
+      public_key: RefCell::new(Some(KeyObjectHandle::AsymmetricPublic(
         public_key,
       ))),
     }
@@ -1226,6 +1259,109 @@ pub async fn op_node_generate_rsa_key_async(
   spawn_blocking(move || generate_rsa(modulus_length, public_exponent))
     .await
     .unwrap()
+}
+
+fn generate_rsa_pss(
+  modulus_length: usize,
+  public_exponent: usize,
+  hash_algorithm: Option<&str>,
+  mf1_hash_algorithm: Option<&str>,
+  salt_length: Option<u32>,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  let key = RsaPrivateKey::new_with_exp(
+    &mut thread_rng(),
+    modulus_length,
+    &rsa::BigUint::from_usize(public_exponent).unwrap(),
+  )
+  .unwrap();
+
+  let details = if hash_algorithm.is_none()
+    && mf1_hash_algorithm.is_none()
+    && salt_length.is_none()
+  {
+    None
+  } else {
+    let hash_algorithm = hash_algorithm.unwrap_or("sha1");
+    let mf1_hash_algorithm = mf1_hash_algorithm.unwrap_or(hash_algorithm);
+    let hash_algorithm = match_fixed_digest_with_oid!(
+      hash_algorithm,
+      fn (algorithm: Option<RsaPssHashAlgorithm>) {
+        algorithm.ok_or_else(|| type_error("digest not allowed for RSA-PSS keys: {}"))?
+      },
+      _ => {
+        return Err(type_error(format!(
+          "digest not allowed for RSA-PSS keys: {}",
+          hash_algorithm
+        )))
+      }
+    );
+    let mf1_hash_algorithm = match_fixed_digest_with_oid!(
+      mf1_hash_algorithm,
+      fn (algorithm: Option<RsaPssHashAlgorithm>) {
+        algorithm.ok_or_else(|| type_error("digest not allowed for RSA-PSS keys: {}"))?
+      },
+      _ => {
+        return Err(type_error(format!(
+          "digest not allowed for RSA-PSS keys: {}",
+          mf1_hash_algorithm
+        )))
+      }
+    );
+    let salt_length =
+      salt_length.unwrap_or_else(|| hash_algorithm.salt_length());
+
+    Some(RsaPssDetails {
+      hash_algorithm,
+      mf1_hash_algorithm,
+      salt_length,
+    })
+  };
+
+  let private_key =
+    AsymmetricPrivateKey::RsaPss(RsaPssPrivateKey { key, details });
+  let public_key = private_key.to_public_key();
+
+  Ok(KeyObjectHandlePair::new(private_key, public_key))
+}
+
+#[op2]
+#[cppgc]
+pub fn op_node_generate_rsa_pss_key(
+  #[smi] modulus_length: usize,
+  #[smi] public_exponent: usize,
+  #[string] hash_algorithm: Option<String>, // todo: Option<&str> not supproted in ops yet
+  #[string] mf1_hash_algorithm: Option<String>, // todo: Option<&str> not supproted in ops yet
+  #[smi] salt_length: Option<u32>,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  generate_rsa_pss(
+    modulus_length,
+    public_exponent,
+    hash_algorithm.as_deref(),
+    mf1_hash_algorithm.as_deref(),
+    salt_length,
+  )
+}
+
+#[op2(async)]
+#[cppgc]
+pub async fn op_node_generate_rsa_pss_key_async(
+  #[smi] modulus_length: usize,
+  #[smi] public_exponent: usize,
+  #[string] hash_algorithm: Option<String>, // todo: Option<&str> not supproted in ops yet
+  #[string] mf1_hash_algorithm: Option<String>, // todo: Option<&str> not supproted in ops yet
+  #[smi] salt_length: Option<u32>,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  spawn_blocking(move || {
+    generate_rsa_pss(
+      modulus_length,
+      public_exponent,
+      hash_algorithm.as_deref(),
+      mf1_hash_algorithm.as_deref(),
+      salt_length,
+    )
+  })
+  .await
+  .unwrap()
 }
 
 fn dsa_generate(
@@ -1324,7 +1460,7 @@ pub async fn op_node_generate_ec_key_async(
 }
 
 fn x25519_generate() -> KeyObjectHandlePair {
-  let keypair = x25519_dalek::StaticSecret::random_from_rng(&mut thread_rng());
+  let keypair = x25519_dalek::StaticSecret::random_from_rng(thread_rng());
   let private_key = AsymmetricPrivateKey::X25519(keypair);
   let public_key = private_key.to_public_key();
   KeyObjectHandlePair::new(private_key, public_key)
@@ -1359,6 +1495,95 @@ pub fn op_node_generate_ed25519_key() -> KeyObjectHandlePair {
 #[cppgc]
 pub async fn op_node_generate_ed25519_key_async() -> KeyObjectHandlePair {
   spawn_blocking(ed25519_generate).await.unwrap()
+}
+
+fn dh_group_generate(
+  group_name: &str,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  let dh = match group_name {
+    "modp5" => dh::DiffieHellman::group::<dh::Modp1536>(),
+    "modp14" => dh::DiffieHellman::group::<dh::Modp2048>(),
+    "modp15" => dh::DiffieHellman::group::<dh::Modp3072>(),
+    "modp16" => dh::DiffieHellman::group::<dh::Modp4096>(),
+    "modp17" => dh::DiffieHellman::group::<dh::Modp6144>(),
+    "modp18" => dh::DiffieHellman::group::<dh::Modp8192>(),
+    _ => return Err(type_error("Unsupported group name")),
+  };
+  Ok(KeyObjectHandlePair::new(
+    AsymmetricPrivateKey::Dh(dh.private_key),
+    AsymmetricPublicKey::Dh(dh.public_key),
+  ))
+}
+
+#[op2]
+#[cppgc]
+pub fn op_node_generate_dh_group_key(
+  #[string] group_name: &str,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  dh_group_generate(group_name)
+}
+
+#[op2(async)]
+#[cppgc]
+pub async fn op_node_generate_dh_group_key_async(
+  #[string] group_name: String,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  spawn_blocking(move || dh_group_generate(&group_name))
+    .await
+    .unwrap()
+}
+
+fn dh_generate(
+  prime: Option<&[u8]>,
+  prime_len: usize,
+  generator: usize,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  let prime = prime
+    .map(|p| p.into())
+    .unwrap_or_else(|| Prime::generate(prime_len));
+  let dh = dh::DiffieHellman::new(prime, generator);
+  Ok(KeyObjectHandlePair::new(
+    AsymmetricPrivateKey::Dh(dh.private_key),
+    AsymmetricPublicKey::Dh(dh.public_key),
+  ))
+}
+
+#[op2]
+#[cppgc]
+pub fn op_node_generate_dh_key(
+  #[buffer] prime: Option<&[u8]>,
+  #[smi] prime_len: usize,
+  #[smi] generator: usize,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  dh_generate(prime, prime_len, generator)
+}
+
+#[op2(async)]
+#[cppgc]
+pub async fn op_node_generate_dh_key_async(
+  #[buffer(copy)] prime: Option<Box<[u8]>>,
+  #[smi] prime_len: usize,
+  #[smi] generator: usize,
+) -> Result<KeyObjectHandlePair, AnyError> {
+  spawn_blocking(move || dh_generate(prime.as_deref(), prime_len, generator))
+    .await
+    .unwrap()
+}
+
+#[op2]
+#[serde]
+pub fn op_node_dh_keys_generate_and_export(
+  #[buffer] prime: Option<&[u8]>,
+  #[smi] prime_len: usize,
+  #[smi] generator: usize,
+) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
+  let prime = prime
+    .map(|p| p.into())
+    .unwrap_or_else(|| Prime::generate(prime_len));
+  let dh = dh::DiffieHellman::new(prime, generator);
+  let private_key = dh.private_key.into_vec().into_boxed_slice();
+  let public_key = dh.public_key.into_vec().into_boxed_slice();
+  Ok((private_key.into(), public_key.into()))
 }
 
 #[op2]
@@ -1464,9 +1689,9 @@ pub fn op_node_export_private_key_der(
 #[string]
 pub fn op_node_key_type(#[cppgc] handle: &KeyObjectHandle) -> &'static str {
   match handle {
-    KeyObjectHandle::AsymmetricPrivateKey(_) => "private",
-    KeyObjectHandle::AsymmetricPublicKey(_) => "public",
-    KeyObjectHandle::SecretKey(_) => "secret",
+    KeyObjectHandle::AsymmetricPrivate(_) => "private",
+    KeyObjectHandle::AsymmetricPublic(_) => "public",
+    KeyObjectHandle::Secret(_) => "secret",
   }
 }
 
@@ -1479,7 +1704,7 @@ pub fn op_node_derive_public_key_from_private_key(
     return Err(type_error("expected private key"));
   };
 
-  Ok(KeyObjectHandle::AsymmetricPublicKey(
+  Ok(KeyObjectHandle::AsymmetricPublic(
     private_key.to_public_key(),
   ))
 }

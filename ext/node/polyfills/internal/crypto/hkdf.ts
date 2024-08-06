@@ -18,6 +18,7 @@ import {
   hideStackFrames,
 } from "ext:deno_node/internal/errors.ts";
 import {
+  kHandle,
   toBuf,
   validateByteSource,
 } from "ext:deno_node/internal/crypto/util.ts";
@@ -110,7 +111,7 @@ export function hkdf(
 
   hash = hash.toLowerCase();
 
-  op_node_hkdf_async(hash, key, salt, info, length)
+  op_node_hkdf_async(hash, key[kHandle], salt, info, length)
     .then((okm) => callback(null, okm.buffer))
     .catch((err) => callback(new ERR_CRYPTO_INVALID_DIGEST(err), undefined));
 }
@@ -134,7 +135,7 @@ export function hkdfSync(
 
   const okm = new Uint8Array(length);
   try {
-    op_node_hkdf(hash, key, salt, info, okm);
+    op_node_hkdf(hash, key[kHandle], salt, info, okm);
   } catch (e) {
     throw new ERR_CRYPTO_INVALID_DIGEST(e);
   }

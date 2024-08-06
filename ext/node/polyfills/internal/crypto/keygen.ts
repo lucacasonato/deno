@@ -31,10 +31,10 @@ import { Buffer } from "node:buffer";
 import { KeyFormat, KeyType } from "ext:deno_node/internal/crypto/types.ts";
 
 import {
-  op_node_dh_generate,
-  op_node_dh_generate_async,
-  op_node_dh_generate_group,
-  op_node_dh_generate_group_async,
+  op_node_generate_dh_group_key,
+  op_node_generate_dh_group_key_async,
+  op_node_generate_dh_key,
+  op_node_generate_dh_key_async,
   op_node_generate_dsa_key,
   op_node_generate_dsa_key_async,
   op_node_generate_ec_key,
@@ -43,6 +43,8 @@ import {
   op_node_generate_ed25519_key_async,
   op_node_generate_rsa_key,
   op_node_generate_rsa_key_async,
+  op_node_generate_rsa_pss_key,
+  op_node_generate_rsa_pss_key_async,
   op_node_generate_secret_key,
   op_node_generate_secret_key_async,
   op_node_generate_x25519_key,
@@ -874,8 +876,23 @@ function createJob(mode, type, options) {
         }
       }
 
-      notImplemented("generating rsa-pss key pair");
-      break;
+      if (mode === kSync) {
+        return op_node_generate_rsa_pss_key(
+          modulusLength,
+          publicExponent,
+          hashAlgorithm,
+          mgf1HashAlgorithm ?? mgf1Hash,
+          saltLength,
+        );
+      } else {
+        return op_node_generate_rsa_pss_key_async(
+          modulusLength,
+          publicExponent,
+          hashAlgorithm,
+          mgf1HashAlgorithm ?? mgf1Hash,
+          saltLength,
+        );
+      }
     }
     case "dsa": {
       validateObject(options, "options");
@@ -952,9 +969,9 @@ function createJob(mode, type, options) {
         validateString(group, "options.group");
 
         if (mode === kSync) {
-          return op_node_dh_generate_group(group);
+          return op_node_generate_dh_group_key(group);
         } else {
-          return op_node_dh_generate_group_async(group);
+          return op_node_generate_dh_group_key_async(group);
         }
       }
 
@@ -979,9 +996,9 @@ function createJob(mode, type, options) {
       const g = generator == null ? 2 : generator;
 
       if (mode === kSync) {
-        return op_node_dh_generate(prime, primeLength ?? 0, g);
+        return op_node_generate_dh_key(prime, primeLength ?? 0, g);
       } else {
-        return op_node_dh_generate_async(
+        return op_node_generate_dh_key_async(
           prime,
           primeLength ?? 0,
           g,

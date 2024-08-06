@@ -46,7 +46,10 @@ import {
   getDefaultEncoding,
   toBuf,
 } from "ext:deno_node/internal/crypto/util.ts";
-import { isArrayBufferView } from "ext:deno_node/internal/util/types.ts";
+import {
+  isAnyArrayBuffer,
+  isArrayBufferView,
+} from "ext:deno_node/internal/util/types.ts";
 
 const { ReflectApply, ObjectSetPrototypeOf } = primordials;
 
@@ -218,8 +221,14 @@ class HmacImpl extends Transform {
     validateString(hmac, "hmac");
 
     key = prepareSecretKey(key, options?.encoding);
-
-    const keyData = op_node_export_secret_key(key);
+    let keyData;
+    if (isArrayBufferView(key)) {
+      keyData = key;
+    } else if (isAnyArrayBuffer(key)) {
+      keyData = new Uint8Array(key);
+    } else {
+      keyData = op_node_export_secret_key(key);
+    }
 
     const alg = hmac.toLowerCase();
     this.#algorithm = alg;

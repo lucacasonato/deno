@@ -1,3 +1,4 @@
+// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
 use deno_core::error::generic_error;
 use deno_core::error::type_error;
 use deno_core::error::AnyError;
@@ -53,38 +54,49 @@ impl KeyObjectHandle {
         };
 
         let signature = signer
-          .sign(Some(&mut OsRng), &key, digest)
+          .sign(Some(&mut OsRng), key, digest)
           .map_err(|_| generic_error("failed to sign digest with RSA"))?;
         Ok(signature.into())
       }
       AsymmetricPrivateKey::RsaPss(key) => {
-        let pss = match (digest_type, key.hash_algorithm) {
-          ("sha1", RsaPssHashAlgorithm::Sha1) => {
-            rsa::pss::Pss::new_with_salt::<sha1::Sha1>(key.salt_length as usize)
+        let mut hash_algorithm = None;
+        let mut salt_length = None;
+        match &key.details {
+          Some(details) => {
+            if details.hash_algorithm != details.mf1_hash_algorithm {
+              return Err(type_error(
+                "rsa-pss with different mf1 hash algorithm and hash algorithm is not supported",
+              ));
+            }
+            hash_algorithm = Some(details.hash_algorithm);
+            salt_length = Some(details.salt_length as usize);
           }
-          ("sha256", RsaPssHashAlgorithm::Sha256) => {
-            rsa::pss::Pss::new_with_salt::<sha2::Sha256>(
-              key.salt_length as usize,
-            )
-          }
-          ("sha384", RsaPssHashAlgorithm::Sha384) => {
-            rsa::pss::Pss::new_with_salt::<sha2::Sha384>(
-              key.salt_length as usize,
-            )
-          }
-          ("sha512", RsaPssHashAlgorithm::Sha512) => {
-            rsa::pss::Pss::new_with_salt::<sha2::Sha512>(
-              key.salt_length as usize,
-            )
-          }
-          (alg, _) => {
+          None => {}
+        };
+        let pss = match_fixed_digest_with_oid!(
+          digest_type,
+          fn <D>(algorithm: Option<RsaPssHashAlgorithm>) {
+            if let Some(hash_algorithm) = hash_algorithm.take() {
+              if Some(hash_algorithm) != algorithm {
+                return Err(type_error(format!(
+                  "private key does not allow {} to be used, expected {}",
+                  digest_type, hash_algorithm.as_str()
+                )));
+              }
+            }
+            if let Some(salt_length) = salt_length {
+              rsa::pss::Pss::new_with_salt::<D>(salt_length)
+            } else {
+              rsa::pss::Pss::new::<D>()
+            }
+          },
+          _ => {
             return Err(type_error(format!(
-              "digest not allowed for RSA-PSS signature with this key: {}",
-              alg
+              "digest not allowed for RSA-PSS signature: {}",
+              digest_type
             )))
           }
-        };
-
+        );
         let signature = pss
           .sign(Some(&mut OsRng), &key.key, digest)
           .map_err(|_| generic_error("failed to sign digest with RSA-PSS"))?;
@@ -95,7 +107,6 @@ impl KeyObjectHandle {
           digest_type,
           fn <D>() {
             key.sign_prehashed_rfc6979::<D>(digest)
-
           },
           _ => {
             return Err(type_error(format!(
@@ -196,33 +207,44 @@ impl KeyObjectHandle {
         Ok(signer.verify(key, digest, signature).is_ok())
       }
       AsymmetricPublicKey::RsaPss(key) => {
-        let pss = match (digest_type, key.hash_algorithm) {
-          ("sha1", RsaPssHashAlgorithm::Sha1) => {
-            rsa::pss::Pss::new_with_salt::<sha1::Sha1>(key.salt_length as usize)
+        let mut hash_algorithm = None;
+        let mut salt_length = None;
+        match &key.details {
+          Some(details) => {
+            if details.hash_algorithm != details.mf1_hash_algorithm {
+              return Err(type_error(
+                "rsa-pss with different mf1 hash algorithm and hash algorithm is not supported",
+              ));
+            }
+            hash_algorithm = Some(details.hash_algorithm);
+            salt_length = Some(details.salt_length as usize);
           }
-          ("sha256", RsaPssHashAlgorithm::Sha256) => {
-            rsa::pss::Pss::new_with_salt::<sha2::Sha256>(
-              key.salt_length as usize,
-            )
-          }
-          ("sha384", RsaPssHashAlgorithm::Sha384) => {
-            rsa::pss::Pss::new_with_salt::<sha2::Sha384>(
-              key.salt_length as usize,
-            )
-          }
-          ("sha512", RsaPssHashAlgorithm::Sha512) => {
-            rsa::pss::Pss::new_with_salt::<sha2::Sha512>(
-              key.salt_length as usize,
-            )
-          }
-          (alg, _) => {
+          None => {}
+        };
+        let pss = match_fixed_digest_with_oid!(
+          digest_type,
+          fn <D>(algorithm: Option<RsaPssHashAlgorithm>) {
+            if let Some(hash_algorithm) = hash_algorithm.take() {
+              if Some(hash_algorithm) != algorithm {
+                return Err(type_error(format!(
+                  "private key does not allow {} to be used, expected {}",
+                  digest_type, hash_algorithm.as_str()
+                )));
+              }
+            }
+            if let Some(salt_length) = salt_length {
+              rsa::pss::Pss::new_with_salt::<D>(salt_length)
+            } else {
+              rsa::pss::Pss::new::<D>()
+            }
+          },
+          _ => {
             return Err(type_error(format!(
-              "digest not allowed for RSA-PSS signature with this key: {}",
-              alg
+              "digest not allowed for RSA-PSS signature: {}",
+              digest_type
             )))
           }
-        };
-
+        );
         Ok(pss.verify(&key.key, digest, signature).is_ok())
       }
       AsymmetricPublicKey::Dsa(key) => {

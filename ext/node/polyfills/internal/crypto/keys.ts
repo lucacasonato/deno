@@ -57,11 +57,7 @@ import {
   validateObject,
   validateOneOf,
 } from "ext:deno_node/internal/validators.mjs";
-import {
-  forgivingBase64UrlEncode as encodeToBase64Url,
-} from "ext:deno_web/00_infra.js";
 import { BufferEncoding } from "ext:deno_node/_global.d.ts";
-import console from "node:console";
 
 export const getArrayBufferOrView = hideStackFrames(
   (

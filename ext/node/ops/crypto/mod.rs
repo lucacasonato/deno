@@ -13,7 +13,6 @@ use hkdf::Hkdf;
 use keys::KeyObjectHandle;
 use num_bigint::BigInt;
 use num_bigint_dig::BigUint;
-use primes::Prime;
 use rand::distributions::Distribution;
 use rand::distributions::Uniform;
 use rand::Rng;
@@ -466,78 +465,6 @@ pub async fn op_node_hkdf_async(
   .await?
 }
 
-fn dh_generate_group(
-  group_name: &str,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  let dh = match group_name {
-    "modp5" => dh::DiffieHellman::group::<dh::Modp1536>(),
-    "modp14" => dh::DiffieHellman::group::<dh::Modp2048>(),
-    "modp15" => dh::DiffieHellman::group::<dh::Modp3072>(),
-    "modp16" => dh::DiffieHellman::group::<dh::Modp4096>(),
-    "modp17" => dh::DiffieHellman::group::<dh::Modp6144>(),
-    "modp18" => dh::DiffieHellman::group::<dh::Modp8192>(),
-    _ => return Err(type_error("Unsupported group name")),
-  };
-
-  Ok((
-    dh.private_key.into_vec().into(),
-    dh.public_key.into_vec().into(),
-  ))
-}
-
-#[op2]
-#[serde]
-pub fn op_node_dh_generate_group(
-  #[string] group_name: &str,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  dh_generate_group(group_name)
-}
-
-#[op2(async)]
-#[serde]
-pub async fn op_node_dh_generate_group_async(
-  #[string] group_name: String,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  spawn_blocking(move || dh_generate_group(&group_name)).await?
-}
-
-fn dh_generate(
-  prime: Option<&[u8]>,
-  prime_len: usize,
-  generator: usize,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  let prime = prime
-    .map(|p| p.into())
-    .unwrap_or_else(|| Prime::generate(prime_len));
-  let dh = dh::DiffieHellman::new(prime, generator);
-
-  Ok((
-    dh.private_key.into_vec().into(),
-    dh.public_key.into_vec().into(),
-  ))
-}
-
-#[op2]
-#[serde]
-pub fn op_node_dh_generate(
-  #[serde] prime: Option<&[u8]>,
-  #[number] prime_len: usize,
-  #[number] generator: usize,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  dh_generate(prime, prime_len, generator)
-}
-
-// TODO(lev): This duplication should be avoided.
-#[op2]
-#[serde]
-pub fn op_node_dh_generate2(
-  #[buffer] prime: JsBuffer,
-  #[number] prime_len: usize,
-  #[number] generator: usize,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  dh_generate(Some(prime).as_deref(), prime_len, generator)
-}
-
 #[op2]
 #[serde]
 pub fn op_node_dh_compute_secret(
@@ -551,17 +478,6 @@ pub fn op_node_dh_compute_secret(
   let shared_secret: BigUint = pubkey.modpow(&privkey, &primei);
 
   Ok(shared_secret.to_bytes_be().into())
-}
-
-#[op2(async)]
-#[serde]
-pub async fn op_node_dh_generate_async(
-  #[buffer] prime: Option<JsBuffer>,
-  #[number] prime_len: usize,
-  #[number] generator: usize,
-) -> Result<(ToJsBuffer, ToJsBuffer), AnyError> {
-  spawn_blocking(move || dh_generate(prime.as_deref(), prime_len, generator))
-    .await?
 }
 
 #[op2(fast)]

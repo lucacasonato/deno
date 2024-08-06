@@ -6,6 +6,7 @@
 
 import {
   op_node_create_private_key,
+  op_node_create_public_key,
   op_node_sign,
   op_node_verify,
 } from "ext:core/ops";
@@ -27,7 +28,6 @@ import type {
 import {
   kConsumePrivate,
   kConsumePublic,
-  kCreatePrivate,
   KeyObject,
   prepareAsymmetricKey,
 } from "ext:deno_node/internal/crypto/keys.ts";
@@ -142,16 +142,16 @@ export class VerifyImpl extends Writable {
 
   verify(
     // deno-lint-ignore no-explicit-any
-    privateKey: any,
+    publicKey: any,
     signature: BinaryLike,
     encoding?: BinaryToTextEncoding,
   ): boolean {
-    const res = prepareAsymmetricKey(privateKey, kConsumePublic);
+    const res = prepareAsymmetricKey(publicKey, kConsumePublic);
     let handle;
     if ("handle" in res) {
       handle = res.handle;
     } else {
-      handle = op_node_create_private_key(
+      handle = op_node_create_public_key(
         res.data,
         res.format,
         res.type ?? "",
