@@ -1,19 +1,19 @@
 // Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
 
+#![allow(long_running_const_eval)]
+
 use std::env;
 use std::path::PathBuf;
 
 use deno_core::snapshot::*;
-use deno_runtime::*;
-mod shared;
 
 mod ts {
   use super::*;
   use deno_core::error::custom_error;
   use deno_core::error::AnyError;
   use deno_core::op2;
+  use deno_core::serde_json;
   use deno_core::OpState;
-  use deno_runtime::deno_node::SUPPORTED_BUILTIN_NODE_MODULES;
   use serde::Serialize;
   use std::collections::HashMap;
   use std::io::Write;
@@ -37,10 +37,12 @@ mod ts {
       .iter()
       .map(|s| s.to_string())
       .collect();
-    let node_built_in_module_names = SUPPORTED_BUILTIN_NODE_MODULES
-      .iter()
-      .map(|s| s.to_string())
-      .collect();
+    let node_built_in_module_names_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("supported_node_builtins.json");
+    let node_built_in_module_names = serde_json::from_str::<Vec<String>>(
+      &std::fs::read_to_string(node_built_in_module_names_path).unwrap(),
+    )
+    .unwrap();
     BuildInfoResponse {
       build_specifier,
       libs: build_libs,
@@ -144,38 +146,45 @@ mod ts {
   );
 
   pub fn create_compiler_snapshot(snapshot_path: PathBuf, cwd: &Path) {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("tsc")
+      .join("dts")
+      .join("deno");
+
     // libs that are being provided by op crates.
-    let mut op_crate_libs = HashMap::new();
-    op_crate_libs.insert("deno.cache", deno_cache::get_declaration());
-    op_crate_libs.insert("deno.console", deno_console::get_declaration());
-    op_crate_libs.insert("deno.url", deno_url::get_declaration());
-    op_crate_libs.insert("deno.web", deno_web::get_declaration());
-    op_crate_libs.insert("deno.fetch", deno_fetch::get_declaration());
-    op_crate_libs.insert("deno.webgpu", deno_webgpu_get_declaration());
-    op_crate_libs.insert("deno.websocket", deno_websocket::get_declaration());
-    op_crate_libs.insert("deno.webstorage", deno_webstorage::get_declaration());
-    op_crate_libs.insert("deno.canvas", deno_canvas::get_declaration());
-    op_crate_libs.insert("deno.crypto", deno_crypto::get_declaration());
-    op_crate_libs.insert(
+    let mut deno_libs = HashMap::new();
+    deno_libs.insert("deno.cache", root.join("lib.deno_cache.d.ts"));
+    deno_libs.insert("deno.console", root.join("lib.deno_console.d.ts"));
+    deno_libs.insert("deno.url", root.join("lib.deno_url.d.ts"));
+    deno_libs.insert("deno.web", root.join("lib.deno_web.d.ts"));
+    deno_libs.insert("deno.fetch", root.join("lib.deno_fetch.d.ts"));
+    deno_libs.insert("deno.webgpu", root.join("lib.deno_webgpu.d.ts"));
+    deno_libs.insert("deno.websocket", root.join("lib.deno_websocket.d.ts"));
+    deno_libs.insert("deno.webstorage", root.join("lib.deno_webstorage.d.ts"));
+    deno_libs.insert("deno.canvas", root.join("lib.deno_canvas.d.ts"));
+    deno_libs.insert("deno.crypto", root.join("lib.deno_crypto.d.ts"));
+    deno_libs.insert(
       "deno.broadcast_channel",
-      deno_broadcast_channel::get_declaration(),
+      root.join("lib.deno_broadcast_channel.d.ts"),
     );
-    op_crate_libs.insert("deno.net", deno_net::get_declaration());
+    deno_libs.insert("deno.net", root.join("lib.deno_net.d.ts"));
+    deno_libs.insert("deno.window", root.join("lib.deno.window.d.ts"));
+    deno_libs.insert("deno.worker", root.join("lib.deno.worker.d.ts"));
+    deno_libs.insert(
+      "deno.shared_globals",
+      root.join("lib.deno.shared_globals.d.ts"),
+    );
+    deno_libs.insert("deno.ns", root.join("lib.deno.ns.d.ts"));
+    deno_libs.insert("deno.unstable", root.join("lib.deno.unstable.d.ts"));
 
     // ensure we invalidate the build properly.
-    for (_, path) in op_crate_libs.iter() {
+    for (_, path) in deno_libs.iter() {
       println!("cargo:rerun-if-changed={}", path.display());
     }
 
     // libs that should be loaded into the isolate before snapshotting.
     let libs = vec![
-      // Deno custom type libraries
-      "deno.window",
-      "deno.worker",
-      "deno.shared_globals",
-      "deno.ns",
-      "deno.unstable",
-      // Deno built-in type libraries
+      // TS built-in type libraries
       "decorators",
       "decorators.legacy",
       "es5",
@@ -261,8 +270,8 @@ mod ts {
     // create a copy of the vector that includes any op crate libs to be passed
     // to the JavaScript compiler to build into the snapshot
     let mut build_libs = libs.clone();
-    for (op_lib, _) in op_crate_libs.iter() {
-      build_libs.push(op_lib.to_owned());
+    for deno_lib in deno_libs.keys() {
+      build_libs.push(deno_lib.to_owned());
     }
 
     // used in the tests to verify that after snapshotting it has the same number
@@ -279,9 +288,7 @@ mod ts {
         cargo_manifest_dir: env!("CARGO_MANIFEST_DIR"),
         startup_snapshot: None,
         extensions: vec![deno_tsc::init_ops_and_esm(
-          op_crate_libs,
-          build_libs,
-          path_dts,
+          deno_libs, build_libs, path_dts,
         )],
         extension_transpiler: None,
         with_runtime_cb: None,
@@ -314,7 +321,9 @@ mod ts {
   }
 
   pub(crate) fn version() -> String {
-    let file_text = std::fs::read_to_string("tsc/00_typescript.js").unwrap();
+    let path = "tsc/00_typescript.js";
+    println!("cargo:rerun-if-changed={}", path);
+    let file_text = std::fs::read_to_string(path).unwrap();
     let version_text = " version = \"";
     for line in file_text.lines() {
       if let Some(index) = line.find(version_text) {
@@ -324,23 +333,6 @@ mod ts {
     }
     panic!("Could not find ts version.")
   }
-}
-
-#[cfg(not(feature = "hmr"))]
-fn create_cli_snapshot(snapshot_path: PathBuf) {
-  use deno_runtime::ops::bootstrap::SnapshotOptions;
-
-  let snapshot_options = SnapshotOptions {
-    ts_version: ts::version(),
-    v8_version: deno_core::v8::VERSION_STRING,
-    target: std::env::var("TARGET").unwrap(),
-  };
-
-  deno_runtime::snapshot::create_runtime_snapshot(
-    snapshot_path,
-    snapshot_options,
-    vec![],
-  );
 }
 
 fn git_commit_hash() -> String {
@@ -392,6 +384,7 @@ fn main() {
     .expect(
         "Missing symbols list! Generate using tools/napi/generate_symbols_lists.js",
     );
+  println!("cargo:rerun-if-changed={}", symbols_path.display());
 
   #[cfg(target_os = "windows")]
   println!(
@@ -459,12 +452,6 @@ fn main() {
   let compiler_snapshot_path = o.join("COMPILER_SNAPSHOT.bin");
   ts::create_compiler_snapshot(compiler_snapshot_path, &c);
 
-  #[cfg(not(feature = "hmr"))]
-  {
-    let cli_snapshot_path = o.join("CLI_SNAPSHOT.bin");
-    create_cli_snapshot(cli_snapshot_path);
-  }
-
   #[cfg(target_os = "windows")]
   {
     let mut res = winres::WindowsResource::new();
@@ -475,12 +462,4 @@ fn main() {
     ));
     res.compile().unwrap();
   }
-}
-
-fn deno_webgpu_get_declaration() -> PathBuf {
-  let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-  manifest_dir
-    .join("tsc")
-    .join("dts")
-    .join("lib.deno_webgpu.d.ts")
 }

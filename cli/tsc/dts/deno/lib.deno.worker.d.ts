@@ -4,7 +4,6 @@
 /// <reference lib="deno.ns" />
 /// <reference lib="deno.shared_globals" />
 /// <reference lib="esnext" />
-/// <reference lib="deno.cache" />
 
 /** @category Workers */
 declare interface WorkerGlobalScopeEventMap {

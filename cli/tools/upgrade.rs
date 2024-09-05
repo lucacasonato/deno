@@ -8,11 +8,11 @@ use crate::colors;
 use crate::factory::CliFactory;
 use crate::http_util::HttpClient;
 use crate::http_util::HttpClientProvider;
-use crate::shared::ReleaseChannel;
 use crate::util::archive;
 use crate::util::progress_bar::ProgressBar;
 use crate::util::progress_bar::ProgressBarStyle;
 use crate::version;
+use crate::version::ReleaseChannel;
 
 use async_trait::async_trait;
 use color_print::cstr;

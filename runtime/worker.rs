@@ -449,12 +449,6 @@ impl MainWorker {
       ops::web_worker::deno_web_worker::init_ops_and_esm().disable(),
     ];
 
-    #[cfg(feature = "hmr")]
-    assert!(
-      cfg!(not(feature = "only_snapshotted_js_sources")),
-      "'hmr' is incompatible with 'only_snapshotted_js_sources'."
-    );
-
     for extension in &mut extensions {
       if options.startup_snapshot.is_some() {
         extension.js_files = std::borrow::Cow::Borrowed(&[]);
@@ -464,9 +458,6 @@ impl MainWorker {
     }
 
     extensions.extend(std::mem::take(&mut options.extensions));
-
-    #[cfg(feature = "only_snapshotted_js_sources")]
-    options.startup_snapshot.as_ref().expect("A user snapshot was not provided, even though 'only_snapshotted_js_sources' is used.");
 
     let has_notified_of_inspector_disconnect = AtomicBool::new(false);
     let wait_for_inspector_disconnect_callback = Box::new(move || {

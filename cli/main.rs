@@ -20,7 +20,6 @@ mod node;
 mod npm;
 mod ops;
 mod resolver;
-mod shared;
 mod standalone;
 mod task_runner;
 mod tools;
@@ -386,6 +385,11 @@ pub fn main() {
   );
 
   let args: Vec<_> = env::args_os().collect();
+  if std::env::var("DENO_FINALIZE_BUILD").as_deref() == Ok("1") {
+    finalize_build();
+    std::process::exit(0);
+  }
+
   let future = async move {
     // NOTE(lucacasonato): due to new PKU feature introduced in V8 11.6 we need to
     // initialize the V8 platform on a parent thread of all threads that will spawn
@@ -457,4 +461,50 @@ fn resolve_flags_and_init(
   util::logger::init(flags.log_level);
 
   Ok(flags)
+}
+
+fn finalize_build() {
+  use deno_runtime::ops::bootstrap::SnapshotOptions;
+
+  deno_core::JsRuntime::init_platform(None, true);
+
+  let snapshot_options = SnapshotOptions {
+    ts_version: version::DENO_VERSION_INFO.typescript.to_owned(),
+    v8_version: deno_core::v8::VERSION_STRING,
+    target: env!("TARGET").to_owned(),
+  };
+
+  let output =
+    deno_runtime::snapshot::create_runtime_snapshot(snapshot_options, vec![]);
+
+  let self_exe = std::env::current_exe().unwrap();
+  let self_exe_data = std::fs::read(&self_exe).unwrap();
+
+  let mut output_exe = std::fs::File::create(&self_exe).unwrap();
+
+  if cfg!(target_os = "linux") {
+    libsui::Elf::new(&self_exe_data)
+      .append(
+        js::DENO_RT_SNAPSHOT_SECTION_NAME,
+        &output.output,
+        &mut output_exe,
+      )
+      .unwrap();
+  } else if cfg!(target_os = "windows") {
+    libsui::PortableExecutable::from(&self_exe_data)
+      .unwrap()
+      .write_resource(js::DENO_RT_SNAPSHOT_SECTION_NAME, output.output.to_vec())
+      .unwrap()
+      .build(&mut output_exe)
+      .unwrap();
+  } else if cfg!(target_os = "macos") {
+    libsui::Macho::from(self_exe_data)
+      .unwrap()
+      .write_section(js::DENO_RT_SNAPSHOT_SECTION_NAME, output.output.to_vec())
+      .unwrap()
+      .build_and_sign(&mut output_exe)
+      .unwrap();
+  } else {
+    panic!("Unsupported target");
+  }
 }

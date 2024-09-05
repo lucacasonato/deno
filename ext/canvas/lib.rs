@@ -11,7 +11,6 @@ use image::Pixel;
 use image::RgbaImage;
 use serde::Deserialize;
 use serde::Serialize;
-use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,7 +147,3 @@ deno_core::extension!(
   ops = [op_image_process, op_image_decode_png],
   lazy_loaded_esm = ["01_image.js"],
 );
-
-pub fn get_declaration() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_canvas.d.ts")
-}

@@ -46,7 +46,6 @@ use std::cell::RefCell;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
@@ -862,10 +861,6 @@ deno_core::extension!(deno_websocket,
     state.put::<WsRootStoreProvider>(WsRootStoreProvider(options.root_cert_store_provider));
   },
 );
-
-pub fn get_declaration() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_websocket.d.ts")
-}
 
 #[derive(Debug)]
 pub struct DomExceptionNetworkError {

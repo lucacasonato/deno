@@ -28,37 +28,22 @@ import {
 
 webidl.converters["ImageOrientation"] = webidl.createEnumConverter(
   "ImageOrientation",
-  [
-    "from-image",
-    "flipY",
-  ],
+  ["from-image", "flipY"]
 );
 
 webidl.converters["PremultiplyAlpha"] = webidl.createEnumConverter(
   "PremultiplyAlpha",
-  [
-    "none",
-    "premultiply",
-    "default",
-  ],
+  ["none", "premultiply", "default"]
 );
 
 webidl.converters["ColorSpaceConversion"] = webidl.createEnumConverter(
   "ColorSpaceConversion",
-  [
-    "none",
-    "default",
-  ],
+  ["none", "default"]
 );
 
 webidl.converters["ResizeQuality"] = webidl.createEnumConverter(
   "ResizeQuality",
-  [
-    "pixelated",
-    "low",
-    "medium",
-    "high",
-  ],
+  ["pixelated", "low", "medium", "high"]
 );
 
 webidl.converters["ImageBitmapOptions"] = webidl.createDictionaryConverter(
@@ -100,7 +85,7 @@ webidl.converters["ImageBitmapOptions"] = webidl.createDictionaryConverter(
       converter: webidl.converters["ResizeQuality"],
       defaultValue: "low",
     },
-  ],
+  ]
 );
 
 const _bitmapData = Symbol("[[bitmapData]]");
@@ -144,12 +129,9 @@ class ImageBitmap {
       createFilteredInspectProxy({
         object: this,
         evaluate: ObjectPrototypeIsPrototypeOf(ImageBitmapPrototype, this),
-        keys: [
-          "width",
-          "height",
-        ],
+        keys: ["width", "height"],
       }),
-      inspectOptions,
+      inspectOptions
     );
   }
 }
@@ -161,7 +143,7 @@ function createImageBitmap(
   sy = undefined,
   sw = undefined,
   sh = undefined,
-  options = undefined,
+  options = undefined
 ) {
   const prefix = "Failed to execute 'createImageBitmap'";
 
@@ -170,7 +152,7 @@ function createImageBitmap(
     options = webidl.converters["ImageBitmapOptions"](
       sxOrOptions,
       prefix,
-      "Argument 2",
+      "Argument 2"
     );
   } else {
     // Overload: createImageBitmap(image, sx, sy, sw, sh [, options ])
@@ -181,7 +163,7 @@ function createImageBitmap(
     options = webidl.converters["ImageBitmapOptions"](
       options,
       prefix,
-      "Argument 6",
+      "Argument 6"
     );
 
     if (sw === 0) {
@@ -197,16 +179,16 @@ function createImageBitmap(
     return PromiseReject(
       new DOMException(
         "options.resizeWidth has to be greater than 0",
-        "InvalidStateError",
-      ),
+        "InvalidStateError"
+      )
     );
   }
   if (options.resizeHeight === 0) {
     return PromiseReject(
       new DOMException(
         "options.resizeWidth has to be greater than 0",
-        "InvalidStateError",
-      ),
+        "InvalidStateError"
+      )
     );
   }
 
@@ -221,7 +203,7 @@ function createImageBitmap(
       sy,
       sw,
       sh,
-      options,
+      options
     );
     imageBitmap[_bitmapData] = processedImage.data;
     imageBitmap[_width] = processedImage.outputWidth;
@@ -235,12 +217,14 @@ function createImageBitmap(
       if (mimetype !== "image/png") {
         throw new DOMException(
           `Unsupported type '${image.type}'`,
-          "InvalidStateError",
+          "InvalidStateError"
         );
       }
-      const { data: imageData, width, height } = op_image_decode_png(
-        new Uint8Array(data),
-      );
+      const {
+        data: imageData,
+        width,
+        height,
+      } = op_image_decode_png(new Uint8Array(data));
       const processedImage = processImage(
         imageData,
         width,
@@ -249,7 +233,7 @@ function createImageBitmap(
         sy,
         sw,
         sh,
-        options,
+        options
       );
       imageBitmap[_bitmapData] = processedImage.data;
       imageBitmap[_width] = processedImage.outputWidth;
@@ -265,7 +249,10 @@ function processImage(input, width, height, sx, sy, sw, sh, options) {
   let sourceRectangle;
 
   if (
-    sx !== undefined && sy !== undefined && sw !== undefined && sh !== undefined
+    sx !== undefined &&
+    sy !== undefined &&
+    sw !== undefined &&
+    sh !== undefined
   ) {
     sourceRectangle = [
       [sx, sy],
@@ -289,7 +276,7 @@ function processImage(input, width, height, sx, sy, sw, sh, options) {
     outputWidth = options.resizeWidth;
   } else if (options.resizeHeight !== undefined) {
     outputWidth = MathCeil(
-      (widthOfSourceRect * options.resizeHeight) / heightOfSourceRect,
+      (widthOfSourceRect * options.resizeHeight) / heightOfSourceRect
     );
   } else {
     outputWidth = widthOfSourceRect;
@@ -300,7 +287,7 @@ function processImage(input, width, height, sx, sy, sw, sh, options) {
     outputHeight = options.resizeHeight;
   } else if (options.resizeWidth !== undefined) {
     outputHeight = MathCeil(
-      (heightOfSourceRect * options.resizeWidth) / widthOfSourceRect,
+      (heightOfSourceRect * options.resizeWidth) / widthOfSourceRect
     );
   } else {
     outputHeight = heightOfSourceRect;
@@ -308,7 +295,7 @@ function processImage(input, width, height, sx, sy, sw, sh, options) {
 
   if (options.colorSpaceConversion === "none") {
     throw new TypeError(
-      "Cannot create image: invalid colorSpaceConversion option, 'none' is not supported",
+      "Cannot create image: invalid colorSpaceConversion option, 'none' is not supported"
     );
   }
 
@@ -334,10 +321,11 @@ function processImage(input, width, height, sx, sy, sw, sh, options) {
       outputHeight,
       resizeQuality: options.resizeQuality,
       flipY: options.imageOrientation === "flipY",
-      premultiply: options.premultiplyAlpha === "default"
-        ? null
-        : (options.premultiplyAlpha === "premultiply"),
-    },
+      premultiply:
+        options.premultiplyAlpha === "default"
+          ? null
+          : options.premultiplyAlpha === "premultiply",
+    }
   );
 
   return {

@@ -11,9 +11,7 @@ use deno_core::v8;
 use deno_core::Extension;
 use deno_http::DefaultHttpPropertyExtractor;
 use deno_io::fs::FsError;
-use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -211,11 +209,10 @@ impl deno_kv::sqlite::SqliteDbHandlerPermissions for Permissions {
 }
 
 pub fn create_runtime_snapshot(
-  snapshot_path: PathBuf,
   snapshot_options: SnapshotOptions,
   // NOTE: For embedders that wish to add additional extensions to the snapshot
   custom_extensions: Vec<Extension>,
-) {
+) -> CreateSnapshotOutput {
   // NOTE(bartlomieju): ordering is important here, keep it in sync with
   // `runtime/worker.rs`, `runtime/web_worker.rs` and `runtime/snapshot.rs`!
   let fs = std::sync::Arc::new(deno_fs::RealFs);
@@ -274,7 +271,7 @@ pub fn create_runtime_snapshot(
   ];
   extensions.extend(custom_extensions);
 
-  let output = create_snapshot(
+  create_snapshot(
     CreateSnapshotOptions {
       cargo_manifest_dir: env!("CARGO_MANIFEST_DIR"),
       startup_snapshot: None,
@@ -302,12 +299,5 @@ pub fn create_runtime_snapshot(
     },
     None,
   )
-  .unwrap();
-  let mut snapshot = std::fs::File::create(snapshot_path).unwrap();
-  snapshot.write_all(&output.output).unwrap();
-
-  #[allow(clippy::print_stdout)]
-  for path in output.files_loaded_during_snapshot {
-    println!("cargo:rerun-if-changed={}", path.display());
-  }
+  .unwrap()
 }

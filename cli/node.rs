@@ -143,3 +143,19 @@ impl CjsCodeAnalyzer for CliCjsCodeAnalyzer {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use deno_runtime::deno_node::SUPPORTED_BUILTIN_NODE_MODULES;
+
+  #[test]
+  fn test_supported_node_builtins() {
+    let supported_node_builtins = include_str!("supported_node_builtins.json");
+    let supported_node_builtins: Vec<String> =
+      serde_json::from_str(supported_node_builtins).unwrap();
+    assert_eq!(
+      supported_node_builtins, SUPPORTED_BUILTIN_NODE_MODULES,
+      "cli/supported_node_builtins.json is out of date"
+    );
+  }
+}

@@ -6,7 +6,7 @@
 /// <reference path="../webidl/internal.d.ts" />
 /// <reference path="../fetch/lib.deno_fetch.d.ts" />
 /// <reference path="../web/internal.d.ts" />
-/// <reference path="../web/lib.deno_web.d.ts" />
+/// <reference path="../../cli/tsc/dts/deno/lib.deno_web.d.ts" />
 /// <reference lib="esnext" />
 
 import { core, primordials } from "ext:core/mod.js";

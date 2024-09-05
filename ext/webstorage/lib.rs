@@ -41,10 +41,6 @@ deno_core::extension!(deno_webstorage,
   },
 );
 
-pub fn get_declaration() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_webstorage.d.ts")
-}
-
 struct LocalStorage(Connection);
 struct SessionStorage(Connection);
 

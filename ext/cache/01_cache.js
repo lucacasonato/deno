@@ -89,7 +89,7 @@ class Cache {
     request = webidl.converters["RequestInfo_DOMString"](
       request,
       prefix,
-      "Argument 1",
+      "Argument 1"
     );
     response = webidl.converters["Response"](response, prefix, "Argument 2");
     // Step 1.
@@ -105,7 +105,7 @@ class Cache {
     const reqUrl = new URL(innerRequest.url());
     if (reqUrl.protocol !== "http:" && reqUrl.protocol !== "https:") {
       throw new TypeError(
-        `Request url protocol must be 'http:' or 'https:': received '${reqUrl.protocol}'`,
+        `Request url protocol must be 'http:' or 'https:': received '${reqUrl.protocol}'`
       );
     }
     if (innerRequest.method !== "GET") {
@@ -138,7 +138,7 @@ class Cache {
     let rid = null;
     if (stream) {
       const resourceBacking = getReadableStreamResourceBacking(
-        innerResponse.body?.stream,
+        innerResponse.body?.stream
       );
       if (resourceBacking) {
         rid = resourceBacking.rid;
@@ -152,18 +152,16 @@ class Cache {
 
     // Step 9-11.
     // Step 12-19: TODO(@satyarohith): do the insertion in background.
-    await op_cache_put(
-      {
-        cacheId: this[_id],
-        // deno-lint-ignore prefer-primordials
-        requestUrl: reqUrl.toString(),
-        responseHeaders: innerResponse.headerList,
-        requestHeaders: innerRequest.headerList,
-        responseStatus: innerResponse.status,
-        responseStatusText: innerResponse.statusMessage,
-        responseRid: rid,
-      },
-    );
+    await op_cache_put({
+      cacheId: this[_id],
+      // deno-lint-ignore prefer-primordials
+      requestUrl: reqUrl.toString(),
+      responseHeaders: innerResponse.headerList,
+      requestHeaders: innerRequest.headerList,
+      responseStatus: innerResponse.status,
+      responseStatusText: innerResponse.statusMessage,
+      responseRid: rid,
+    });
   }
 
   /** See https://w3c.github.io/ServiceWorker/#cache-match */
@@ -174,7 +172,7 @@ class Cache {
     request = webidl.converters["RequestInfo_DOMString"](
       request,
       prefix,
-      "Argument 1",
+      "Argument 1"
     );
     const p = await this[_matchAll](request, options);
     if (p.length > 0) {
@@ -192,7 +190,7 @@ class Cache {
     request = webidl.converters["RequestInfo_DOMString"](
       request,
       prefix,
-      "Argument 1",
+      "Argument 1"
     );
     // Step 1.
     let r = null;
@@ -252,28 +250,23 @@ class Cache {
       const url = new URL(r.url);
       url.hash = "";
       const innerRequest = toInnerRequest(r);
-      const matchResult = await op_cache_match(
-        {
-          cacheId: this[_id],
-          // deno-lint-ignore prefer-primordials
-          requestUrl: url.toString(),
-          requestHeaders: innerRequest.headerList,
-        },
-      );
+      const matchResult = await op_cache_match({
+        cacheId: this[_id],
+        // deno-lint-ignore prefer-primordials
+        requestUrl: url.toString(),
+        requestHeaders: innerRequest.headerList,
+      });
       if (matchResult) {
         const { 0: meta, 1: responseBodyRid } = matchResult;
         let body = null;
         if (responseBodyRid !== null) {
           body = readableStreamForRid(responseBodyRid);
         }
-        const response = new Response(
-          body,
-          {
-            headers: meta.responseHeaders,
-            status: meta.responseStatus,
-            statusText: meta.responseStatusText,
-          },
-        );
+        const response = new Response(body, {
+          headers: meta.responseHeaders,
+          status: meta.responseStatus,
+          statusText: meta.responseStatusText,
+        });
         ArrayPrototypePush(responses, response);
       }
     }

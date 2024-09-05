@@ -10,7 +10,6 @@ use deno_core::url::quirks;
 use deno_core::url::Url;
 use deno_core::JsBuffer;
 use deno_core::OpState;
-use std::path::PathBuf;
 
 use crate::urlpattern::op_urlpattern_parse;
 use crate::urlpattern::op_urlpattern_process_match_input;
@@ -242,8 +241,4 @@ pub fn op_url_stringify_search_params(
     .extend_pairs(args)
     .finish();
   search
-}
-
-pub fn get_declaration() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_url.d.ts")
 }

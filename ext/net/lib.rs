@@ -14,7 +14,6 @@ use deno_core::OpState;
 use deno_tls::rustls::RootCertStore;
 use deno_tls::RootCertStoreProvider;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const UNSTABLE_FEATURE_NAME: &str = "net";
@@ -66,10 +65,6 @@ fn check_unstable(state: &OpState, api_name: &str) {
   state
     .feature_checker
     .check_or_exit_with_legacy_fallback(UNSTABLE_FEATURE_NAME, api_name);
-}
-
-pub fn get_declaration() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_net.d.ts")
 }
 
 #[derive(Clone)]

@@ -23,7 +23,6 @@ use encoding_rs::Encoding;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::blob::op_blob_create_object_url;
@@ -408,10 +407,6 @@ fn op_encoding_encode_into_fast(
     Cow::Owned(v) => v[..boundary].encode_utf16().count() as u32,
   };
   out_buf[1] = boundary as u32;
-}
-
-pub fn get_declaration() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib.deno_web.d.ts")
 }
 
 #[derive(Debug)]

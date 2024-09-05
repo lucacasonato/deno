@@ -15,13 +15,8 @@ const {
   op_dispatch_bench_event,
   op_bench_now,
 } = core.ops;
-const {
-  ArrayPrototypePush,
-  Error,
-  MathCeil,
-  SymbolToStringTag,
-  TypeError,
-} = primordials;
+const { ArrayPrototypePush, Error, MathCeil, SymbolToStringTag, TypeError } =
+  primordials;
 
 /** @type {number | null} */
 let currentBenchId = null;
@@ -42,11 +37,7 @@ const registerBenchIdRetBufU8 = new Uint8Array(registerBenchIdRetBuf.buffer);
 let cachedOrigin = undefined;
 
 // Main bench function provided by Deno.
-function bench(
-  nameOrFnOrOptions,
-  optionsOrFn,
-  maybeFn,
-) {
+function bench(nameOrFnOrOptions, optionsOrFn, maybeFn) {
   // No-op if we're not running in `deno bench` subcommand.
   if (typeof op_register_bench !== "function") {
     return;
@@ -77,7 +68,7 @@ function bench(
       warmupBenchDesc.ignore,
       warmupBenchDesc.only,
       warmupBenchDesc.warmup,
-      registerBenchIdRetBufU8,
+      registerBenchIdRetBufU8
     );
     warmupBenchDesc.id = registerBenchIdRetBufU8[0];
     warmupBenchDesc.origin = cachedOrigin;
@@ -104,12 +95,12 @@ function bench(
       }
       if (optionsOrFn.fn != undefined) {
         throw new TypeError(
-          "Unexpected 'fn' field in options, bench function is already provided as the third argument",
+          "Unexpected 'fn' field in options, bench function is already provided as the third argument"
         );
       }
       if (optionsOrFn.name != undefined) {
         throw new TypeError(
-          "Unexpected 'name' field in options, bench name is already provided as the first argument",
+          "Unexpected 'name' field in options, bench name is already provided as the first argument"
         );
       }
       benchDesc = {
@@ -141,16 +132,14 @@ function bench(
       fn = optionsOrFn;
       if (nameOrFnOrOptions.fn != undefined) {
         throw new TypeError(
-          "Unexpected 'fn' field in options, bench function is already provided as the second argument",
+          "Unexpected 'fn' field in options, bench function is already provided as the second argument"
         );
       }
       name = nameOrFnOrOptions.name ?? fn.name;
     } else {
-      if (
-        !nameOrFnOrOptions.fn || typeof nameOrFnOrOptions.fn !== "function"
-      ) {
+      if (!nameOrFnOrOptions.fn || typeof nameOrFnOrOptions.fn !== "function") {
         throw new TypeError(
-          "Expected 'fn' field in the first argument to be a bench function",
+          "Expected 'fn' field in the first argument to be a bench function"
         );
       }
       fn = nameOrFnOrOptions.fn;
@@ -178,7 +167,7 @@ function bench(
     benchDesc.ignore,
     benchDesc.only,
     false,
-    registerBenchIdRetBufU8,
+    registerBenchIdRetBufU8
   );
   benchDesc.id = registerBenchIdRetBufU8[0];
   benchDesc.origin = cachedOrigin;
@@ -191,15 +180,7 @@ function compareMeasurements(a, b) {
   return 0;
 }
 
-function benchStats(
-  n,
-  highPrecision,
-  usedExplicitTimers,
-  avg,
-  min,
-  max,
-  all,
-) {
+function benchStats(n, highPrecision, usedExplicitTimers, avg, min, max, all) {
   return {
     n,
     min,
@@ -208,7 +189,7 @@ function benchStats(
     p99: all[MathCeil(n * (99 / 100)) - 1],
     p995: all[MathCeil(n * (99.5 / 100)) - 1],
     p999: all[MathCeil(n * (99.9 / 100)) - 1],
-    avg: !highPrecision ? (avg / n) : MathCeil(avg / n),
+    avg: !highPrecision ? avg / n : MathCeil(avg / n),
     highPrecision,
     usedExplicitTimers,
   };
@@ -372,7 +353,7 @@ async function benchMeasure(timeBudget, fn, async, context) {
     avg,
     min,
     max,
-    all,
+    all
   );
 }
 
@@ -385,13 +366,11 @@ function createBenchContext(desc) {
     start() {
       if (currentBenchId !== desc.id) {
         throw new TypeError(
-          "The benchmark which this context belongs to is not being executed",
+          "The benchmark which this context belongs to is not being executed"
         );
       }
       if (currentBenchUserExplicitStart != null) {
-        throw new TypeError(
-          "BenchContext::start() has already been invoked",
-        );
+        throw new TypeError("BenchContext::start() has already been invoked");
       }
       currentBenchUserExplicitStart = benchNow();
     },
@@ -399,7 +378,7 @@ function createBenchContext(desc) {
       const end = benchNow();
       if (currentBenchId !== desc.id) {
         throw new TypeError(
-          "The benchmark which this context belongs to is not being executed",
+          "The benchmark which this context belongs to is not being executed"
         );
       }
       if (currentBenchUserExplicitEnd != null) {
@@ -430,19 +409,14 @@ function wrapBenchmark(desc) {
       if (desc.sanitizeExit) {
         setExitHandler((exitCode) => {
           throw new Error(
-            `Bench attempted to exit with exit code: ${exitCode}`,
+            `Bench attempted to exit with exit code: ${exitCode}`
           );
         });
       }
 
       const benchTimeInMs = 500;
       const context = createBenchContext(desc);
-      const stats = await benchMeasure(
-        benchTimeInMs,
-        fn,
-        desc.async,
-        context,
-      );
+      const stats = await benchMeasure(benchTimeInMs, fn, desc.async, context);
 
       return { ok: stats };
     } catch (error) {

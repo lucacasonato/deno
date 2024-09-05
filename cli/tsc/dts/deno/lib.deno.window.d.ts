@@ -5,7 +5,6 @@
 /// <reference lib="deno.shared_globals" />
 /// <reference lib="deno.webstorage" />
 /// <reference lib="esnext" />
-/// <reference lib="deno.cache" />
 
 /** @category Platform */
 declare interface WindowEventMap {
