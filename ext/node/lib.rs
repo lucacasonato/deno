@@ -144,8 +144,8 @@ pub static NODE_ENV_VAR_ALLOWLIST: Lazy<HashSet<String>> = Lazy::new(|| {
 
 #[op2]
 #[string]
-fn op_node_build_os() -> String {
-  env!("TARGET").split('-').nth(2).unwrap().to_string()
+fn op_node_build_os() -> &'static str {
+  env!("TARGET").split('-').nth(2).unwrap()
 }
 
 #[op2]
