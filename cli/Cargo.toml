@@ -55,6 +55,9 @@ lazy-regex = { workspace = true }
 winapi.workspace = true
 winres.workspace = true
 
+[target.'cfg(target_os = "linux")'.build-dependencies]
+glibc_version = "0.1.2"
+
 [dependencies]
 deno_ast = { workspace = true, features = ["bundler", "cjs", "codegen", "proposal", "react", "sourcemap", "transforms", "typescript", "view", "visit"] }
 deno_cache_dir = { workspace = true }
