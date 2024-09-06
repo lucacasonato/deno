@@ -31,10 +31,10 @@ mod worker;
 use crate::args::flags_from_vec;
 use crate::args::DenoSubcommand;
 use crate::args::Flags;
+use crate::js::DENO_RT_SNAPSHOT_SECTION_NAME;
 use crate::util::display;
 use crate::util::v8::get_v8_flags_from_env;
 use crate::util::v8::init_v8_flags;
-use crate::js::DENO_RT_SNAPSHOT_SECTION_NAME;
 
 use args::TaskFlags;
 use deno_runtime::WorkerExecutionMode;
@@ -386,7 +386,9 @@ pub fn main() {
   );
 
   let args: Vec<_> = env::args_os().collect();
-  if std::env::var("DENO_FINALIZE_BUILD").as_deref() == Ok("1") && libsui::find_section(DENO_RT_SNAPSHOT_SECTION_NAME).is_none() {
+  if std::env::var("DENO_FINALIZE_BUILD").as_deref() == Ok("1")
+    && libsui::find_section(DENO_RT_SNAPSHOT_SECTION_NAME).is_none()
+  {
     finalize_build();
     std::process::exit(0);
   }

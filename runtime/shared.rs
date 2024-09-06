@@ -10,6 +10,10 @@ use deno_core::Extension;
 use deno_core::ModuleCodeString;
 use deno_core::ModuleName;
 use deno_core::SourceMapData;
+use deno_crypto::rand;
+use std::env::temp_dir;
+use std::hash::Hash;
+use std::hash::Hasher as _;
 use std::path::Path;
 
 extension!(runtime,
@@ -77,12 +81,53 @@ pub fn maybe_transpile_source(
 
   match media_type {
     MediaType::TypeScript => {}
-    MediaType::JavaScript => return Ok((source, None)),
-    MediaType::Mjs => return Ok((source, None)),
+    MediaType::JavaScript | MediaType::Mjs => return Ok((source, None)),
     _ => panic!(
       "Unsupported media type for snapshotting {media_type:?} for file {}",
       name
     ),
+  }
+
+  let transpile_options = deno_ast::TranspileOptions {
+    imports_not_used_as_values: deno_ast::ImportsNotUsedAsValues::Remove,
+    ..Default::default()
+  };
+  let emit_options = deno_ast::EmitOptions {
+    source_map: if cfg!(debug_assertions) {
+      SourceMapOption::Separate
+    } else {
+      SourceMapOption::None
+    },
+    ..Default::default()
+  };
+
+  let mut hasher = std::hash::DefaultHasher::new();
+  source.hash(&mut hasher);
+  transpile_options.hash(&mut hasher);
+  emit_options.hash(&mut hasher);
+  let source_hash = hasher.finish();
+
+  let base_path = temp_dir().join("deno_rt_ext_transpile_cache");
+  std::fs::create_dir_all(&base_path)?;
+  let js_path = base_path.join(format!("{:x}.js", source_hash));
+  let js_map_path = base_path.join(format!("{:x}.js.map", source_hash));
+
+  let js_source = std::fs::read_to_string(&js_path).ok();
+
+  'a: {
+    if let Some(source_text) = js_source {
+      let maybe_source_map =
+        if emit_options.source_map == SourceMapOption::Separate {
+          if let Some(source_map) = std::fs::read(&js_map_path).ok() {
+            Some(source_map.into())
+          } else {
+            break 'a;
+          }
+        } else {
+          None
+        };
+      return Ok((source_text.into(), maybe_source_map));
+    }
   }
 
   let parsed = deno_ast::parse_module(ParseParams {
@@ -113,6 +158,20 @@ pub fn maybe_transpile_source(
   let maybe_source_map: Option<SourceMapData> =
     transpiled_source.source_map.map(|sm| sm.into());
   let source_text = String::from_utf8(transpiled_source.source)?;
+
+  let random_suffix = rand::random::<u32>();
+  let js_path_tmp =
+    base_path.join(format!("{:x}-{}.js", source_hash, random_suffix));
+  let js_map_path_tmp =
+    base_path.join(format!("{:x}-{}.js.map", source_hash, random_suffix));
+  std::fs::write(&js_path_tmp, &source_text)?;
+  if let Some(source_map) = &maybe_source_map {
+    std::fs::write(&js_map_path_tmp, &source_map)?;
+  }
+  std::fs::rename(&js_path_tmp, &js_path)?;
+  if maybe_source_map.is_some() {
+    std::fs::rename(&js_map_path_tmp, &js_map_path)?;
+  }
 
   Ok((source_text.into(), maybe_source_map))
 }
